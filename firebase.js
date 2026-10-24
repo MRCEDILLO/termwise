@@ -7,7 +7,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
   getFirestore, doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc,
-  writeBatch, query, where, orderBy, serverTimestamp, Timestamp,
+  writeBatch, query, where, orderBy, limit, serverTimestamp, Timestamp,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import {
   getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject,
@@ -80,7 +80,10 @@ export function createFirebaseStore(config) {
       for (let attempt = 0; attempt < 5; attempt++) {
         const key = newKey();
         const b = writeBatch(db);
-        b.set(ref, { name, subject, year, colour, owner: uid, currentKey: key, archived: false, createdAt: serverTimestamp() });
+        b.set(ref, {
+          name, subject, year, colour, owner: uid, currentKey: key, archived: false, createdAt: serverTimestamp(),
+          teacher: (auth.currentUser.displayName || '').slice(0, 80),
+        });
         b.set(doc(db, 'joinKeys', key), { classId: ref.id, owner: uid });
         try {
           await b.commit();
@@ -161,6 +164,50 @@ export function createFirebaseStore(config) {
       const b = writeBatch(db);
       lessons.forEach((l, i) => b.update(doc(db, 'classes', id, 'lessons', l.id), { order: i }));
       await b.commit();
+    },
+
+    /* ---------- units ---------- */
+
+    async getUnits(id) {
+      const snap = await getDocs(query(collection(db, 'classes', id, 'units'), orderBy('order')));
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    },
+
+    newUnitId(id) {
+      return doc(collection(db, 'classes', id, 'units')).id;
+    },
+
+    saveUnit(id, unit) {
+      const { id: unitId, ...data } = unit;
+      return setDoc(doc(db, 'classes', id, 'units', unitId), data);
+    },
+
+    // The unit's lessons stay, with no unit.
+    async deleteUnit(id, unitId, lessonIds) {
+      const b = writeBatch(db);
+      lessonIds.forEach((l) => b.update(doc(db, 'classes', id, 'lessons', l), { unitId: null }));
+      b.delete(doc(db, 'classes', id, 'units', unitId));
+      await b.commit();
+    },
+
+    /* ---------- announcements ---------- */
+
+    async getAnnouncements(id) {
+      const snap = await getDocs(query(collection(db, 'classes', id, 'announcements'), orderBy('createdAt', 'desc'), limit(50)));
+      return snap.docs.map((d) => {
+        const data = d.data();
+        return { id: d.id, text: data.text, createdAt: data.createdAt ? data.createdAt.toMillis() : Date.now() };
+      });
+    },
+
+    async addAnnouncement(id, text) {
+      const ref = doc(collection(db, 'classes', id, 'announcements'));
+      await setDoc(ref, { text, createdAt: serverTimestamp() });
+      return { id: ref.id, text, createdAt: Date.now() };
+    },
+
+    deleteAnnouncement(id, postId) {
+      return deleteDoc(doc(db, 'classes', id, 'announcements', postId));
     },
 
     /* ---------- lesson files ---------- */

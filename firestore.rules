@@ -39,14 +39,18 @@ service cloud.firestore {
     }
 
     function validClass(d) {
-      return d.keys().hasOnly(['name', 'subject', 'year', 'owner', 'currentKey', 'archived', 'colour', 'createdAt'])
+      return d.keys().hasOnly(['name', 'subject', 'year', 'owner', 'currentKey', 'archived', 'colour', 'createdAt', 'teacher', 'contact', 'about'])
         && d.name is string && d.name.size() > 0 && d.name.size() <= 80
         && d.subject is string && d.subject.size() <= 80
         && d.year is string && d.year.size() <= 20
         && d.archived is bool
         && validKey(d.currentKey)
         && (!('colour' in d) || (d.colour is int && d.colour >= 0 && d.colour < 32))
-        && (!('createdAt' in d) || d.createdAt is timestamp || d.createdAt is int);
+        && (!('createdAt' in d) || d.createdAt is timestamp || d.createdAt is int)
+        // Shown to students on the class home page.
+        && (!('teacher' in d) || (d.teacher is string && d.teacher.size() <= 80))
+        && (!('contact' in d) || (d.contact is string && d.contact.size() <= 200))
+        && (!('about' in d) || (d.about is string && d.about.size() <= 1000));
     }
 
     // The key lookup a class points at must point back at that same class, so one
@@ -117,8 +121,12 @@ service cloud.firestore {
         allow delete: if signedIn() && (request.auth.uid == uid || isOwner(classId));
       }
 
-      // What students may read: the plan, lessons and announcements.
+      // What students may read: the plan, units, lessons and announcements.
       match /plan/{doc} {
+        allow read: if isOwner(classId) || isMember(classId);
+        allow write: if isOwner(classId);
+      }
+      match /units/{unitId} {
         allow read: if isOwner(classId) || isMember(classId);
         allow write: if isOwner(classId);
       }
@@ -128,7 +136,11 @@ service cloud.firestore {
       }
       match /announcements/{postId} {
         allow read: if isOwner(classId) || isMember(classId);
-        allow write: if isOwner(classId);
+        allow create, update: if isOwner(classId)
+          && request.resource.data.keys().hasOnly(['text', 'createdAt'])
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 4000;
+        allow delete: if isOwner(classId);
       }
 
       // Lesson files. Students can see every file's record (so a teacher-only file can say when
@@ -142,7 +154,7 @@ service cloud.firestore {
       // Everything else (students, marks) is owner only.
       match /{sub}/{docId=**} {
         allow read, write: if isOwner(classId)
-          && !(sub in ['members', 'plan', 'lessons', 'announcements', 'files']);
+          && !(sub in ['members', 'plan', 'units', 'lessons', 'announcements', 'files']);
       }
     }
   }
