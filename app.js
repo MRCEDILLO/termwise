@@ -9,6 +9,10 @@ import {
   schedule, emptyPlan, isAssessmentLike, currentWeek, weekRange, slotLabel, cellText, slotDate,
   DAYS, PERIODS_PER_DAY, MAX_WEEKS, TERM_COUNT, clampWeeks,
 } from './planner.js';
+import {
+  emptyTracker, defaultScale, manualLevels, trackerColumns, inTerms, parseScore, result, studentSummary,
+  assessmentSummary, homeworkSummary, classHomework, parseNames, sortStudents, scaleProblem,
+} from './tracker.js';
 
 const store = FIREBASE_CONFIG.apiKey
   ? (await import('./firebase.js')).createFirebaseStore(FIREBASE_CONFIG)
@@ -336,26 +340,37 @@ async function showClass(id, tab, sub = '') {
         </section>`));
       return;
     }
-    const quiet = (p) => p.catch((e) => { console.error(e); return []; });
-    const [plan, lessons, units, files, posts] = await Promise.all([
+    const quiet = (p, empty = []) => p.catch((e) => { console.error(e); return empty; });
+    const isOwner = cls.owner === state.user.uid;
+    // Students never ask for the tracker (and the rules would refuse them).
+    const [plan, lessons, units, files, posts, students, marks, tracker] = await Promise.all([
       store.getPlan(id), store.getLessons(id), quiet(store.getUnits(id)),
       quiet(store.listFiles(id)), quiet(store.getAnnouncements(id)),
+      isOwner ? quiet(store.getStudents(id)) : [], isOwner ? quiet(store.getMarks(id), {}) : {}, isOwner ? quiet(store.getTracker(id), null) : null,
     ]);
     // Lessons saved before terms were chosen are Term 1; a null term means "not on the planner".
     lessons.forEach((l) => { if (l.term === undefined) l.term = 1; });
-    state.cls = { id, cls, plan, lessons, units, files, posts, uploads: [], collapsed: new Set(), isOwner: cls.owner === state.user.uid };
+    state.cls = {
+      id, cls, plan, lessons, units, files, posts, uploads: [], collapsed: new Set(), isOwner,
+      students, marks, tracker: { ...emptyTracker(), ...(tracker || {}) },
+    };
     sortLessons(state.cls);
     state.cls.editTerm = (currentWeek(plan, todayISO()) || { term: 1 }).term;
+    // The tracker opens on the current semester; reports on the whole year.
+    state.cls.trackPeriod = state.cls.editTerm <= 2 ? 's1' : 's2';
+    state.cls.reportPeriod = 'year';
     recompute();
   }
   const c = state.cls;
   const tabs = c.isOwner
-    ? [['home', 'Home'], ['lessons', 'Lessons'], ['planner', 'Planner'], ['week', 'Week'], ['timetable', 'Timetable'], ['setup', 'Setup']]
+    ? [['home', 'Home'], ['lessons', 'Lessons'], ['planner', 'Planner'], ['week', 'Week'], ['timetable', 'Timetable'], ['tracker', 'Tracker'], ['reports', 'Reports'], ['setup', 'Setup']]
     : [['home', 'Home'], ['week', 'Week'], ['lessons', 'Lessons'], ['timetable', 'Timetable']];
   if (!tabs.some(([t]) => t === tab)) tab = 'home';
   const lessonId = tab === 'lessons' && sub && c.lessons.some((l) => l.id === sub) ? sub : null;
   if (lessonId !== c.lessonId) c.preview = false;
+  if (tab !== c.tab || sub !== c.sub) c.scaleDraft = null;
   c.tab = tab;
+  c.sub = sub;
   c.lessonId = lessonId;
   show($app, frame(html`
     <section class="class-banner" style="--class:${colourOf(c.cls)}">
@@ -383,8 +398,19 @@ function renderPanel() {
   const c = state.cls;
   const panel = document.getElementById('panel');
   if (!panel) return;
-  const views = { home: homePanel, lessons: libraryPanel, planner: plannerPanel, week: weekCalendar, timetable: timetablePanel, setup: setupPanel };
+  const views = {
+    home: homePanel, lessons: libraryPanel, planner: plannerPanel, week: weekCalendar, timetable: timetablePanel,
+    tracker: trackerPanel, reports: reportsPanel, setup: setupPanel,
+  };
+  const scroller = panel.querySelector('.grid-scroll');
+  const keep = scroller ? [scroller.scrollLeft, scroller.scrollTop] : null;
   show(panel, views[c.tab](c));
+  if (c.tab === 'tracker') {
+    fillNumbers(c);
+    // Redrawing the grid (a new column, a removed student) shouldn't lose your place in it.
+    const grid = panel.querySelector('.grid-scroll');
+    if (grid && keep) [grid.scrollLeft, grid.scrollTop] = keep;
+  }
   if (c.tab === 'lessons') {
     applyLibFilter();
     // Keep the sidebar where it was, and the chosen lesson in view.
@@ -1321,6 +1347,485 @@ function timetablePanel(c) {
     <p class="hint">★ marks assessments, tests, quizzes, exams and reviews. Multi-period lessons show the part, e.g. (2/3).</p>`;
 }
 
+/* ---------- tracker: class list, marks and homework (teacher only) ---------- */
+
+// Which terms a tracker or report view covers.
+const PERIOD_CHOICES = [
+  ['year', 'Whole year', null], ['s1', 'Semester 1', [1, 2]], ['s2', 'Semester 2', [3, 4]],
+  ['t1', 'Term 1', [1]], ['t2', 'Term 2', [2]], ['t3', 'Term 3', [3]], ['t4', 'Term 4', [4]],
+];
+const periodOf = (p) => PERIOD_CHOICES.find((x) => x[0] === p) || PERIOD_CHOICES[0];
+
+function periodPicker(name, value) {
+  return html`<label class="inline">Show <select data-period="${name}">
+    ${PERIOD_CHOICES.map(([v, label]) => html`<option value="${v}" ${raw(v === value ? 'selected' : '')}>${label}</option>`)}
+  </select></label>`;
+}
+
+// Assessment and homework columns for the chosen terms.
+function trackerCols(c, period) {
+  const all = trackerColumns(c.lessons, c.placed, c.tracker);
+  const terms = periodOf(period)[2];
+  return { assessment: inTerms(all.assessment, terms), homework: inTerms(all.homework, terms) };
+}
+
+const pctText = (p) => (p === null || p === undefined ? '–' : `${p}%`);
+const colWhen = (col) => (col.date ? fmtShort(col.date) : col.term ? `Term ${col.term}` : col.lessonId ? 'Not on the planner' : '');
+const hwSym = (v) => (v === true ? '✓' : v === false ? '✗' : '');
+const hwWord = (v) => (v === true ? 'done' : v === false ? 'not done' : 'not marked');
+
+function noStudents(c) {
+  return html`<p class="empty">No students yet. Add your class list on the <a href="#/class/${c.id}/tracker/students">Class list</a> page.</p>`;
+}
+
+function trackerPanel(c) {
+  const view = ['homework', 'students', 'scale'].includes(c.sub) ? c.sub : 'marks';
+  const nav = [['marks', 'Assessments', ''], ['homework', 'Homework', '/homework'], ['students', 'Class list', '/students'], ['scale', 'Grading scale', '/scale']];
+  const body = { marks: marksView, homework: homeworkView, students: studentsView, scale: scaleView }[view](c);
+  return html`
+    <div class="trk-bar">
+      <nav class="seg" aria-label="Tracker pages">
+        ${nav.map(([v, label, path]) => html`<a href="#/class/${c.id}/tracker${path}" class="${v === view ? 'on' : ''}" ${raw(v === view ? 'aria-current="page"' : '')}>${label}</a>`)}
+      </nav>
+      ${view === 'marks' || view === 'homework' ? periodPicker('track', c.trackPeriod) : ''}
+    </div>
+    ${body}`;
+}
+
+function colHead(c, col) {
+  return html`
+    <span class="col-title">${col.lessonId ? html`<a href="${lessonUrl(c, col.lessonId)}">${col.title}</a>` : col.title}</span>
+    <span class="col-when">${colWhen(col)}${col.lessonId ? '' : html` <button class="icon-btn small danger" data-action="delete-extra" data-col="${col.id}" aria-label="Remove the column ${col.title}" title="Remove this column">✕</button>`}</span>`;
+}
+
+// Adds a column that isn't tied to a lesson, e.g. a take-home task.
+function extraForm(kind) {
+  return html`
+    <details class="extra-add">
+      <summary>Add ${kind === 'homework' ? 'a homework task' : 'an assessment'} that isn't a lesson</summary>
+      <form data-form="extra-col" data-kind="${kind}" class="row">
+        <label>Name <input name="title" required maxlength="200"></label>
+        <label>Date <span class="optional">(optional)</span> <input name="date" type="date"></label>
+        <button class="btn small primary" type="submit">Add column</button>
+      </form>
+    </details>`;
+}
+
+function marksView(c) {
+  const list = sortStudents(c.students);
+  const cols = trackerCols(c, c.trackPeriod).assessment;
+  const manual = manualLevels(c.tracker.scale).map((g) => g.short);
+  if (!list.length) return noStudents(c);
+  const intro = html`<p class="hint">Every lesson ticked <strong>Assessment</strong> gets a column. Set what each is out of, then type marks${manual.length ? html`, or <strong>${manual.join(' or ')}</strong> to leave a student out of the averages` : ''}. <kbd>Enter</kbd> moves down. You can paste a block of marks copied from a spreadsheet.</p>`;
+  if (!cols.length) {
+    return html`${intro}<p class="empty">No assessments in ${periodOf(c.trackPeriod)[1].toLowerCase()} yet. Tick <strong>Assessment</strong> on a lesson on the Lessons or Planner tab.</p>${extraForm('assessment')}`;
+  }
+  return html`
+    ${intro}
+    <div class="grid-scroll" tabindex="-1">
+      <table class="grid">
+        <thead><tr>
+          <th scope="col" class="name-col">Student</th>
+          ${cols.map((col) => html`<th scope="col" class="col-head">
+            ${colHead(c, col)}
+            <label class="out-of">out of <input type="number" min="0" step="any" inputmode="decimal" data-max="${col.id}" value="${col.max ?? ''}"
+              class="${col.max ? '' : 'missing'}" aria-label="What ${col.title} is out of"></label>
+          </th>`)}
+          <th scope="col" class="sum-col">Average</th>
+          <th scope="col" class="sum-col">Standard</th>
+        </tr></thead>
+        <tbody>${list.map((s) => {
+          const a = (c.marks[s.id] || {}).a || {};
+          return html`<tr>
+            <th scope="row" class="name-col">${s.name}</th>
+            ${cols.map((col) => html`<td><input class="mark" data-mark="${s.id}" data-col="${col.id}" value="${a[col.id] ?? ''}"
+              inputmode="decimal" autocomplete="off" spellcheck="false" aria-label="${s.name}, ${col.title}"><span class="mark-info" data-info="${s.id}|${col.id}"></span></td>`)}
+            <td class="sum-col" data-avg="${s.id}"></td>
+            <td class="sum-col" data-lvl="${s.id}"></td>
+          </tr>`;
+        })}</tbody>
+        <tfoot><tr>
+          <th scope="row" class="name-col">Class average</th>
+          ${cols.map((col) => html`<td data-colavg="${col.id}"></td>`)}
+          <td class="sum-col"></td><td class="sum-col"></td>
+        </tr></tfoot>
+      </table>
+    </div>
+    ${extraForm('assessment')}`;
+}
+
+function homeworkView(c) {
+  const list = sortStudents(c.students);
+  const cols = trackerCols(c, c.trackPeriod).homework;
+  if (!list.length) return noStudents(c);
+  const intro = html`<p class="hint">Every lesson ticked <strong>Homework</strong> gets a column. Click a box to mark it done (✓), then not done (✗), then clear it. Completion only counts the boxes you've marked.</p>`;
+  if (!cols.length) {
+    return html`${intro}<p class="empty">No homework in ${periodOf(c.trackPeriod)[1].toLowerCase()} yet. Tick <strong>Homework</strong> on a lesson on the Lessons or Planner tab.</p>${extraForm('homework')}`;
+  }
+  return html`
+    ${intro}
+    <div class="grid-scroll" tabindex="-1">
+      <table class="grid hw-grid">
+        <thead><tr>
+          <th scope="col" class="name-col">Student</th>
+          ${cols.map((col) => html`<th scope="col" class="col-head">
+            ${colHead(c, col)}
+            <button class="btn tiny" data-action="hw-all" data-col="${col.id}" title="Mark every empty box done">All ✓</button>
+          </th>`)}
+          <th scope="col" class="sum-col">Done</th>
+        </tr></thead>
+        <tbody>${list.map((s) => {
+          const h = (c.marks[s.id] || {}).h || {};
+          return html`<tr>
+            <th scope="row" class="name-col">${s.name}</th>
+            ${cols.map((col) => html`<td><button class="hw ${h[col.id] === true ? 'done' : h[col.id] === false ? 'miss' : ''}" data-action="hw-toggle"
+              data-hw="${s.id}" data-col="${col.id}" aria-label="${s.name}, ${col.title}: ${hwWord(h[col.id])}">${hwSym(h[col.id])}</button></td>`)}
+            <td class="sum-col" data-hwrow="${s.id}"></td>
+          </tr>`;
+        })}</tbody>
+        <tfoot><tr>
+          <th scope="row" class="name-col">Class</th>
+          ${cols.map((col) => html`<td data-colhw="${col.id}"></td>`)}
+          <td class="sum-col" data-classhw></td>
+        </tr></tfoot>
+      </table>
+    </div>
+    ${extraForm('homework')}`;
+}
+
+// Fills in the worked-out numbers (%, levels, averages) without redrawing the grid, so typing isn't interrupted.
+function fillNumbers(c) {
+  const scale = c.tracker.scale;
+  const cols = trackerCols(c, c.trackPeriod);
+  const byId = new Map([...cols.assessment, ...cols.homework].map((x) => [x.id, x]));
+  const set = (el, text, title = '') => { el.textContent = text; if (title) el.title = title; else el.removeAttribute('title'); };
+  document.querySelectorAll('[data-info]').forEach((el) => {
+    const [sid, colId] = el.dataset.info.split('|');
+    const col = byId.get(colId);
+    const r = col && result(scale, ((c.marks[sid] || {}).a || {})[colId], col.max);
+    if (!r) set(el, '');
+    else if (r.counts) set(el, `${pctText(r.pct)} · ${r.grade.short}`, r.grade.label);
+    else if (r.score !== null) set(el, 'needs "out of"');
+    else set(el, 'not counted', r.grade ? r.grade.label : '');
+  });
+  document.querySelectorAll('[data-avg]').forEach((el) => {
+    const sum = studentSummary(scale, cols, c.marks[el.dataset.avg]);
+    set(el, pctText(sum.avgPct));
+    const lvl = document.querySelector(`[data-lvl="${el.dataset.avg}"]`);
+    if (lvl) set(lvl, sum.avgLevel ? sum.avgLevel.short : '–', sum.avgLevel ? `${sum.avgLevel.label} (${sum.avgPoints} points)` : '');
+  });
+  document.querySelectorAll('[data-colavg]').forEach((el) => {
+    const s = assessmentSummary(scale, byId.get(el.dataset.colavg), c.students, c.marks);
+    set(el, pctText(s.avg), s.count ? `${s.count} counted, median ${pctText(s.median)}` : '');
+  });
+  document.querySelectorAll('[data-hwrow]').forEach((el) => {
+    const sum = studentSummary(scale, cols, c.marks[el.dataset.hwrow]);
+    set(el, sum.hwMarked ? `${sum.hwDone}/${sum.hwMarked} · ${sum.hwPct}%` : '–');
+  });
+  document.querySelectorAll('[data-colhw]').forEach((el) => {
+    const s = homeworkSummary(byId.get(el.dataset.colhw), c.students, c.marks);
+    set(el, s.marked ? `${s.pct}%` : '–', s.marked ? `${s.done} of ${s.marked} done` : '');
+  });
+  const all = document.querySelector('[data-classhw]');
+  if (all) { const s = classHomework(cols, c.students, c.marks); set(all, s.marked ? `${s.pct}%` : '–'); }
+}
+
+function studentsView(c) {
+  const list = sortStudents(c.students);
+  return html`
+    <div class="trk-two">
+      <section class="card">
+        <h2>Class list <span class="count">${list.length}</span></h2>
+        ${list.length ? html`<ol class="roster">${list.map((s) => html`
+          <li><input data-sname="${s.id}" value="${s.name}" maxlength="80" aria-label="Name of ${s.name}">
+            <button class="icon-btn danger" data-action="delete-student" data-sid="${s.id}" aria-label="Remove ${s.name}">✕</button></li>`)}</ol>`
+          : html`<p class="empty small">No students yet.</p>`}
+      </section>
+      <section class="card">
+        <h2>Add students</h2>
+        <form data-form="add-students" class="stack">
+          <label>One name per line
+            <textarea name="names" rows="8" placeholder="Ava Nguyen&#10;Leo Papadopoulos"></textarea></label>
+          <p class="hint">You can paste the first-name and last-name columns straight from a spreadsheet. Only names are kept, and only you can see them. A first name and last initial is enough.</p>
+          <button class="btn primary" type="submit">Add to the class</button>
+        </form>
+      </section>
+    </div>`;
+}
+
+// Edits go into a draft and are checked when saved.
+function scaleView(c) {
+  const scale = c.scaleDraft || c.tracker.scale;
+  return html`
+    <section class="card scale-card">
+      <h2>Grading scale</h2>
+      <p class="hint">A mark gets the highest level whose <strong>lowest %</strong> it reaches. Leave the lowest % empty for a level you type in by hand, like Insufficient Evidence: it's left out of every average. The average standard is the average of the points.</p>
+      <div class="table-scroll">
+        <table class="scale-table">
+          <thead><tr><th scope="col">Level</th><th scope="col">Short</th><th scope="col">Points</th><th scope="col">Lowest %</th><th></th></tr></thead>
+          <tbody>${scale.map((g, i) => html`<tr data-level="${i}">
+            <td><input data-gfield="label" value="${g.label}" maxlength="40" aria-label="Level name"></td>
+            <td><input data-gfield="short" value="${g.short}" maxlength="6" aria-label="Short code for ${g.label}"></td>
+            <td><input data-gfield="points" type="number" step="any" value="${g.points}" aria-label="Points for ${g.label}"></td>
+            <td><input data-gfield="min" type="number" min="0" max="100" step="any" value="${g.min ?? ''}" placeholder="By hand" aria-label="Lowest % for ${g.label}"></td>
+            <td><button class="icon-btn danger" data-action="del-level" aria-label="Remove ${g.label}">✕</button></td>
+          </tr>`)}</tbody>
+        </table>
+      </div>
+      <div class="row">
+        <button class="btn" data-action="add-level">Add a level</button>
+        <button class="btn ghost" data-action="reset-scale">Back to the standard scale</button>
+        <button class="btn primary" data-action="save-scale">Save scale</button>
+      </div>
+    </section>`;
+}
+
+/* ---------- reports: student, class summary, assessment analysis ---------- */
+
+function reportHead(c, title, sub) {
+  return html`
+    <header class="report-head">
+      <div>
+        <p class="report-class">${[c.cls.name, c.cls.subject, c.cls.year].filter(Boolean).join(' · ')}</p>
+        <h2>${title}</h2>
+        <p class="report-sub">${sub}</p>
+      </div>
+      <p class="report-date">${fmt(todayISO(), { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+    </header>`;
+}
+
+const stat = (label, value, note = '') => html`<div class="stat"><span class="stat-label">${label}</span><span class="stat-value">${value}</span>${note ? html`<span class="stat-note">${note}</span>` : ''}</div>`;
+
+// Horizontal bars, one per row, with the count written beside each bar.
+function barList(items, caption) {
+  const top = Math.max(1, ...items.map((it) => it.count));
+  return html`
+    <figure class="chart">
+      <figcaption>${caption}</figcaption>
+      <div class="hbars">${items.map((it) => html`
+        <div class="hbar-row" title="${it.title || it.label}: ${plural(it.count, 'result')}">
+          <span class="hbar-label">${it.label}</span>
+          <span class="hbar-track"><span class="hbar-fill" style="width:${(it.count / top) * 100}%"></span></span>
+          <span class="hbar-n">${it.count}</span>
+        </div>`)}</div>
+    </figure>`;
+}
+
+// Score spread in 10% bands as columns.
+function bandChart(bandList) {
+  const top = Math.max(1, ...bandList.map((b) => b.count));
+  return html`
+    <figure class="chart">
+      <figcaption>Score spread (students in each 10% band)</figcaption>
+      <div class="vbars">${bandList.map((b) => html`
+        <div class="vbar" title="${b.from}–${b.to}%: ${plural(b.count, 'student')}">
+          <span class="vbar-plot"><span class="vbar-n">${b.count || ''}</span><span class="vbar-fill" style="height:${(b.count / top) * 85}%"></span></span>
+          <span class="vbar-x ${b.from % 20 ? 'odd' : ''}">${b.from}</span>
+        </div>`)}</div>
+    </figure>`;
+}
+
+function studentReport(c, s, cols) {
+  const scale = c.tracker.scale;
+  const sum = studentSummary(scale, cols, c.marks[s.id]);
+  const classAvg = new Map(cols.assessment.map((col) => [col.id, assessmentSummary(scale, col, c.students, c.marks).avg]));
+  const counted = sum.rows.filter((x) => x.r && x.r.counts).length;
+  const missing = sum.homework.filter((x) => x.done === false);
+  return html`
+    <article class="card report">
+      ${reportHead(c, s.name, `Student report · ${periodOf(c.reportPeriod)[1]}`)}
+      <div class="stats">
+        ${stat('Average', pctText(sum.avgPct), plural(counted, 'assessment'))}
+        ${stat('Average standard', sum.avgLevel ? sum.avgLevel.label : '–', sum.avgPoints !== null ? `${sum.avgPoints} points` : '')}
+        ${stat('Homework done', sum.hwPct === null ? '–' : `${sum.hwPct}%`, sum.hwMarked ? `${sum.hwDone} of ${sum.hwMarked}` : 'none marked')}
+      </div>
+      <h3>Assessments</h3>
+      ${sum.rows.length ? html`
+        <table class="report-table">
+          <thead><tr><th scope="col">Assessment</th><th scope="col">Date</th><th scope="col" class="num">Score</th><th scope="col" class="num">%</th><th scope="col">Standard</th><th scope="col" class="bar-col">Compared with the class</th></tr></thead>
+          <tbody>${sum.rows.map(({ col, r }) => {
+            const avg = classAvg.get(col.id);
+            return html`<tr>
+              <th scope="row">${col.title}</th>
+              <td>${colWhen(col)}</td>
+              <td class="num">${!r ? '–' : r.score !== null ? `${r.score} / ${col.max ?? '?'}` : r.grade ? r.grade.short : '–'}</td>
+              <td class="num">${r && r.counts ? pctText(r.pct) : '–'}</td>
+              <td>${r && r.grade ? r.grade.label : '–'}</td>
+              <td class="bar-col">${r && r.counts ? html`<span class="cmp" role="img" aria-label="${pctText(r.pct)}, class average ${pctText(avg)}">
+                <span class="cmp-fill" style="width:${Math.min(100, r.pct)}%"></span>
+                ${avg !== null ? html`<span class="cmp-avg" style="left:${Math.min(100, avg)}%"></span>` : ''}</span>` : ''}</td>
+            </tr>`;
+          })}</tbody>
+        </table>
+        <p class="hint">Bar: this student's %. Line: the class average.</p>` : html`<p class="empty small">No assessments in this period.</p>`}
+      <h3>Homework</h3>
+      ${!sum.hwMarked ? html`<p class="empty small">No homework marked in this period.</p>`
+        : missing.length ? html`<p>Not done: ${missing.map((x) => x.col.title).join(', ')}.</p>`
+        : html`<p>Every marked homework task done.</p>`}
+    </article>`;
+}
+
+function classReport(c, cols) {
+  const scale = c.tracker.scale;
+  const per = cols.assessment.map((col) => assessmentSummary(scale, col, c.students, c.marks));
+  const pcts = per.flatMap((s) => s.results.filter((x) => x.r && x.r.counts).map((x) => x.r.pct));
+  const avg = pcts.length ? Math.round((pcts.reduce((a, b) => a + b, 0) / pcts.length) * 10) / 10 : null;
+  const hw = classHomework(cols, c.students, c.marks);
+  const totals = scale.map((g) => ({ label: g.label, count: per.reduce((n, s) => n + s.dist.find((d) => d.grade.short === g.short).count, 0) }));
+  return html`
+    <article class="card report">
+      ${reportHead(c, 'Class summary', periodOf(c.reportPeriod)[1])}
+      <div class="stats">
+        ${stat('Students', c.students.length)}
+        ${stat('Class average', pctText(avg), plural(per.length, 'assessment'))}
+        ${stat('Homework done', hw.pct === null ? '–' : `${hw.pct}%`, hw.marked ? `${hw.done} of ${hw.marked} marked` : 'none marked')}
+      </div>
+      <h3>Assessments</h3>
+      ${per.length ? html`
+        <div class="table-scroll">
+          <table class="report-table">
+            <thead><tr><th scope="col">Assessment</th><th scope="col">Date</th><th scope="col" class="num">Results</th><th scope="col" class="num">Average</th><th scope="col" class="num">Median</th><th scope="col" class="num">Highest</th><th scope="col" class="num">Lowest</th>
+              ${scale.map((g) => html`<th scope="col" class="num" title="${g.label}"><abbr title="${g.label}">${g.short}</abbr></th>`)}</tr></thead>
+            <tbody>${per.map((s) => html`<tr>
+              <th scope="row">${s.col.title}</th><td>${colWhen(s.col)}</td>
+              <td class="num">${s.entered}/${c.students.length}</td>
+              <td class="num">${pctText(s.avg)}</td><td class="num">${pctText(s.median)}</td><td class="num">${pctText(s.high)}</td><td class="num">${pctText(s.low)}</td>
+              ${s.dist.map((d) => html`<td class="num">${d.count || ''}</td>`)}
+            </tr>`)}</tbody>
+          </table>
+        </div>
+        ${barList(totals, 'Standards across all these assessments')}` : html`<p class="empty small">No assessments in this period.</p>`}
+      <h3>Homework</h3>
+      ${hw.per.length ? html`
+        <div class="table-scroll">
+          <table class="report-table">
+            <thead><tr><th scope="col">Task</th><th scope="col">Date</th><th scope="col" class="num">Done</th><th scope="col" class="num">Completion</th></tr></thead>
+            <tbody>${hw.per.map((h) => html`<tr><th scope="row">${h.col.title}</th><td>${colWhen(h.col)}</td><td class="num">${h.marked ? `${h.done}/${h.marked}` : '–'}</td><td class="num">${pctText(h.pct)}</td></tr>`)}</tbody>
+          </table>
+        </div>` : html`<p class="empty small">No homework in this period.</p>`}
+    </article>`;
+}
+
+function assessmentReport(c, col) {
+  const scale = c.tracker.scale;
+  const s = assessmentSummary(scale, col, sortStudents(c.students), c.marks);
+  return html`
+    <article class="card report">
+      ${reportHead(c, col.title, `Assessment analysis${col.max ? ` · out of ${col.max}` : ''}${colWhen(col) ? ` · ${colWhen(col)}` : ''}`)}
+      ${!col.max ? html`<div class="banner info no-print" role="status"><span class="banner-icon" aria-hidden="true">i</span><span>Set what this assessment is out of on the Tracker tab to see percentages.</span></div>` : ''}
+      <div class="stats">
+        ${stat('Average', pctText(s.avg))}
+        ${stat('Median', pctText(s.median))}
+        ${stat('Highest', pctText(s.high))}
+        ${stat('Lowest', pctText(s.low))}
+        ${stat('Results', `${s.entered}/${c.students.length}`, s.entered > s.count ? `${s.entered - s.count} not counted` : '')}
+      </div>
+      <div class="charts">
+        ${bandChart(s.bands)}
+        ${barList(s.dist.map((d) => ({ label: d.grade.label, count: d.count })), 'Standards')}
+      </div>
+      <h3>Results</h3>
+      <table class="report-table">
+        <thead><tr><th scope="col">Student</th><th scope="col" class="num">Score</th><th scope="col" class="num">%</th><th scope="col">Standard</th></tr></thead>
+        <tbody>${s.results.map(({ student, r }) => html`<tr>
+          <th scope="row">${student.name}</th>
+          <td class="num">${!r ? '–' : r.score !== null ? r.score : r.grade ? r.grade.short : '–'}</td>
+          <td class="num">${r && r.counts ? pctText(r.pct) : '–'}</td>
+          <td>${r && r.grade ? r.grade.label : '–'}</td>
+        </tr>`)}</tbody>
+      </table>
+    </article>`;
+}
+
+function reportsPanel(c) {
+  const view = ['class', 'assessment'].includes(c.sub) ? c.sub : 'student';
+  const list = sortStudents(c.students);
+  const cols = trackerCols(c, c.reportPeriod);
+  const nav = [['student', 'Student', ''], ['class', 'Class summary', '/class'], ['assessment', 'Assessment analysis', '/assessment']];
+  let pick = '';
+  let body;
+  if (!list.length) body = noStudents(c);
+  else if (view === 'student') {
+    const sel = list.find((s) => s.id === c.reportStudent) || list[0];
+    pick = html`
+      <label class="inline">Student <select data-pick="student">${list.map((s) => html`<option value="${s.id}" ${raw(s === sel ? 'selected' : '')}>${s.name}</option>`)}</select></label>
+      <button class="btn" data-action="print-all">Print every student</button>`;
+    body = c.printAll ? list.map((s) => studentReport(c, s, cols)) : studentReport(c, sel, cols);
+  } else if (view === 'class') {
+    body = classReport(c, cols);
+  } else if (!cols.assessment.length) {
+    body = html`<p class="empty">No assessments in ${periodOf(c.reportPeriod)[1].toLowerCase()}. Tick <strong>Assessment</strong> on a lesson to add one.</p>`;
+  } else {
+    const sel = cols.assessment.find((x) => x.id === c.reportCol) || cols.assessment[0];
+    pick = html`<label class="inline">Assessment <select data-pick="assessment">${cols.assessment.map((x) => html`<option value="${x.id}" ${raw(x === sel ? 'selected' : '')}>${x.title}</option>`)}</select></label>`;
+    body = assessmentReport(c, sel);
+  }
+  return html`
+    <div class="trk-bar no-print">
+      <nav class="seg" aria-label="Reports">
+        ${nav.map(([v, label, path]) => html`<a href="#/class/${c.id}/reports${path}" class="${v === view ? 'on' : ''}" ${raw(v === view ? 'aria-current="page"' : '')}>${label}</a>`)}
+      </nav>
+      <div class="trk-tools">
+        ${periodPicker('report', c.reportPeriod)}
+        ${pick}
+        ${list.length ? html`<button class="btn primary" data-action="print">Print or save as PDF</button>` : ''}
+      </div>
+    </div>
+    <div class="reports ${c.printAll ? 'print-all' : ''}" style="--class:${colourOf(c.cls)}">${body}</div>`;
+}
+
+async function saveTracker(msg = 'Saved') {
+  return saving(store.saveTracker(state.cls.id, state.cls.tracker), msg);
+}
+
+// Saves one assessment cell from its input. Returns false (and puts the old value back) if it isn't a mark.
+async function saveMark(el) {
+  const c = state.cls;
+  const sid = el.dataset.mark;
+  const colId = el.dataset.col;
+  const parsed = parseScore(c.tracker.scale, el.value);
+  const m = (c.marks[sid] ||= {});
+  const a = (m.a ||= {});
+  if (parsed.error) {
+    toast(parsed.error, 'error');
+    el.value = a[colId] ?? '';
+    return false;
+  }
+  el.value = parsed.value ?? '';
+  if ((a[colId] ?? null) === parsed.value) return true;
+  if (parsed.value === null) delete a[colId]; else a[colId] = parsed.value;
+  fillNumbers(c);
+  return saving(store.setMark(c.id, sid, 'a', colId, parsed.value), '');
+}
+
+// A block pasted from a spreadsheet: rows go down the students, tab-separated values across the columns.
+async function pasteMarks(el, text) {
+  const c = state.cls;
+  const inputs = [...document.querySelectorAll('input.mark')];
+  const rows = [...new Set(inputs.map((i) => i.dataset.mark))];
+  const colIds = [...new Set(inputs.map((i) => i.dataset.col))];
+  const r0 = rows.indexOf(el.dataset.mark);
+  const c0 = colIds.indexOf(el.dataset.col);
+  const lines = text.replace(/\r/g, '').replace(/\n$/, '').split('\n');
+  const jobs = [];
+  let bad = 0;
+  lines.forEach((line, i) => line.split('\t').forEach((cell, j) => {
+    const sid = rows[r0 + i];
+    const colId = colIds[c0 + j];
+    if (!sid || !colId) return;
+    const parsed = parseScore(c.tracker.scale, cell);
+    if (parsed.error) { bad++; return; }
+    const a = ((c.marks[sid] ||= {}).a ||= {});
+    if (parsed.value === null) delete a[colId]; else a[colId] = parsed.value;
+    const input = inputs.find((x) => x.dataset.mark === sid && x.dataset.col === colId);
+    if (input) input.value = parsed.value ?? '';
+    jobs.push(store.setMark(c.id, sid, 'a', colId, parsed.value));
+  }));
+  fillNumbers(c);
+  await saving(Promise.all(jobs), `Pasted ${plural(jobs.length, 'mark')}`);
+  if (bad) toast(`${plural(bad, 'cell')} skipped: not a mark.`, 'error');
+}
+
 /* ---------- setup ---------- */
 
 function setupPanel(c) {
@@ -1595,6 +2100,61 @@ $app.addEventListener('click', async (ev) => {
       showClass(c.id, 'setup');
       toast('New key made');
     } catch (e) { console.error(e); toast("Couldn't make a new key. Try again.", 'error'); }
+  } else if (action === 'hw-toggle') {
+    // Not marked -> done -> not done -> not marked.
+    const sid = btn.dataset.hw;
+    const colId = btn.dataset.col;
+    const h = ((c.marks[sid] ||= {}).h ||= {});
+    const next = h[colId] === undefined ? true : h[colId] === true ? false : null;
+    if (next === null) delete h[colId]; else h[colId] = next;
+    btn.className = `hw ${next === true ? 'done' : next === false ? 'miss' : ''}`;
+    btn.textContent = hwSym(next);
+    btn.setAttribute('aria-label', btn.getAttribute('aria-label').replace(/: [^:]*$/, `: ${hwWord(next)}`));
+    fillNumbers(c);
+    await saving(store.setMark(c.id, sid, 'h', colId, next), '');
+  } else if (action === 'hw-all') {
+    const colId = btn.dataset.col;
+    const todo = c.students.filter((s) => ((c.marks[s.id] || {}).h || {})[colId] === undefined);
+    if (!todo.length) { toast('Every box in this column is already marked.'); return; }
+    todo.forEach((s) => { ((c.marks[s.id] ||= {}).h ||= {})[colId] = true; });
+    renderPanel();
+    await saving(Promise.all(todo.map((s) => store.setMark(c.id, s.id, 'h', colId, true))), `Marked ${plural(todo.length, 'student')} done`);
+  } else if (action === 'delete-extra') {
+    const x = c.tracker.extra.find((e) => e.id === btn.dataset.col);
+    if (!x || !confirm(`Remove the column "${x.title}"? Its marks are kept in case you add it back, but won't show anywhere.`)) return;
+    c.tracker.extra = c.tracker.extra.filter((e) => e !== x);
+    renderPanel();
+    await saveTracker('Column removed');
+  } else if (action === 'delete-student') {
+    const s = c.students.find((x) => x.id === btn.dataset.sid);
+    if (!s || !confirm(`Remove ${s.name} from the class list? Their marks and homework are deleted too. This can't be undone.`)) return;
+    c.students = c.students.filter((x) => x !== s);
+    delete c.marks[s.id];
+    renderPanel();
+    await saving(store.deleteStudent(c.id, s.id), `Removed ${s.name}`);
+  } else if (action === 'add-level' || action === 'del-level' || action === 'reset-scale') {
+    c.scaleDraft = action === 'reset-scale' ? defaultScale() : structuredClone(c.scaleDraft || c.tracker.scale);
+    if (action === 'add-level') c.scaleDraft.push({ label: 'New level', short: `L${c.scaleDraft.length + 1}`, points: c.scaleDraft.length, min: null });
+    if (action === 'del-level') c.scaleDraft.splice(Number(btn.closest('[data-level]').dataset.level), 1);
+    renderPanel();
+    if (action === 'reset-scale') toast('Standard scale put back. Save it to keep it.');
+  } else if (action === 'save-scale') {
+    const draft = c.scaleDraft || c.tracker.scale;
+    const problem = scaleProblem(draft);
+    if (problem) { toast(problem, 'error'); return; }
+    // By-hand levels first, then lowest to highest.
+    c.tracker.scale = [...draft].sort((a, b) => (a.min === null ? -1 : a.min) - (b.min === null ? -1 : b.min));
+    c.scaleDraft = null;
+    renderPanel();
+    await saveTracker('Grading scale saved');
+  } else if (action === 'print') {
+    window.print();
+  } else if (action === 'print-all') {
+    // Every student's report, one per page, drawn just for printing.
+    c.printAll = true;
+    renderPanel();
+    window.addEventListener('afterprint', () => { c.printAll = false; renderPanel(); }, { once: true });
+    window.print();
   } else if (action === 'archive') {
     const archived = btn.dataset.value === '1';
     if (archived && !confirm(`Archive ${c.cls.name}? Students won't be able to open it until you restore it.`)) return;
@@ -1665,6 +2225,25 @@ $app.addEventListener('submit', async (ev) => {
     c.editingUnit = null;
     renderPanel();
     await saving(store.saveUnit(c.id, u));
+  } else if (kind === 'add-students') {
+    const have = new Set(c.students.map((s) => s.name.toLowerCase()));
+    const names = parseNames(form.names.value);
+    const fresh = [...new Set(names)].filter((n) => !have.has(n.toLowerCase()));
+    if (!fresh.length) { toast(names.length ? 'Those names are already on the list.' : 'Type or paste at least one name.', 'error'); return; }
+    const added = fresh.map((name) => ({ id: store.newStudentId(c.id), name }));
+    c.students.push(...added);
+    renderPanel();
+    const skipped = names.length - fresh.length;
+    await saving(store.saveStudents(c.id, added), `Added ${plural(added.length, 'student')}${skipped ? ` (${skipped} already on the list)` : ''}`);
+  } else if (kind === 'extra-col') {
+    const title = form.title.value.trim().slice(0, 200);
+    if (!title) return;
+    const date = form.date.value;
+    const term = date ? (currentWeek(c.plan, date) || {}).term || null : null;
+    const kindOf = form.dataset.kind === 'homework' ? 'homework' : 'assessment';
+    c.tracker.extra.push({ id: `x-${Math.random().toString(36).slice(2, 10)}`, kind: kindOf, title, date, term });
+    renderPanel();
+    await saveTracker('Column added');
   } else if (kind === 'post') {
     const text = form.text.value.trim().slice(0, 4000);
     if (!text) return;
@@ -1687,6 +2266,42 @@ $app.addEventListener('change', async (ev) => {
   const el = ev.target;
   const c = state.cls;
   if (c && el.dataset.upload) { await uploadFiles(el); return; }
+  if (c && el.dataset.mark) { await saveMark(el); return; }
+  if (c && el.dataset.max) {
+    const n = Number(el.value);
+    if (el.value && n > 0) c.tracker.max[el.dataset.max] = n; else delete c.tracker.max[el.dataset.max];
+    el.classList.toggle('missing', !c.tracker.max[el.dataset.max]);
+    fillNumbers(c);
+    await saveTracker('');
+    return;
+  }
+  if (c && el.dataset.sname) {
+    const s = c.students.find((x) => x.id === el.dataset.sname);
+    const name = el.value.trim().replace(/\s+/g, ' ').slice(0, 80);
+    if (!s || !name) { if (s) el.value = s.name; return; }
+    s.name = name;
+    await saving(store.saveStudents(c.id, [s]));
+    return;
+  }
+  if (c && el.dataset.gfield) {
+    c.scaleDraft ||= structuredClone(c.tracker.scale);
+    const g = c.scaleDraft[Number(el.closest('[data-level]').dataset.level)];
+    const f = el.dataset.gfield;
+    g[f] = f === 'min' ? (el.value === '' ? null : Number(el.value)) : f === 'points' ? Number(el.value) : el.value.trim();
+    return;
+  }
+  if (c && el.dataset.period) {
+    c[el.dataset.period === 'track' ? 'trackPeriod' : 'reportPeriod'] = el.value;
+    renderPanel();
+    document.querySelector(`[data-period="${el.dataset.period}"]`)?.focus();
+    return;
+  }
+  if (c && el.dataset.pick) {
+    c[el.dataset.pick === 'student' ? 'reportStudent' : 'reportCol'] = el.value;
+    renderPanel();
+    document.querySelector(`[data-pick="${el.dataset.pick}"]`)?.focus();
+    return;
+  }
   if (c && el.dataset.ffield) { await updateFile(el.closest('[data-file]').dataset.file, el.dataset.ffield, el); return; }
   const builder = c && el.dataset.lfield && el.closest('[data-lesson]');
   if (builder) {
@@ -1763,6 +2378,25 @@ $app.addEventListener('keydown', (ev) => {
   else if (ev.key === 'ArrowUp') { ev.preventDefault(); step(-1); }
   else if (ev.key === 'Enter') { ev.preventDefault(); if (active >= 0) pickResult(active); }
   else if (ev.key === 'Escape') hideResults();
+});
+
+// Marks grid: Enter goes down a row (Shift+Enter up), like a spreadsheet.
+$app.addEventListener('keydown', (ev) => {
+  const el = ev.target;
+  if (ev.key !== 'Enter' || !el.classList || !el.classList.contains('mark')) return;
+  ev.preventDefault();
+  const column = [...document.querySelectorAll(`input.mark[data-col="${el.dataset.col}"]`)];
+  const next = column[column.indexOf(el) + (ev.shiftKey ? -1 : 1)];
+  if (next) { next.focus(); next.select(); } else el.blur();
+});
+// Pasting several marks at once fills down (and across) from that cell.
+$app.addEventListener('paste', (ev) => {
+  const el = ev.target;
+  if (!el.classList || !el.classList.contains('mark')) return;
+  const text = (ev.clipboardData || window.clipboardData).getData('text');
+  if (!/[\t\n]/.test(text.trim())) return;
+  ev.preventDefault();
+  pasteMarks(el, text);
 });
 
 // ← and → flip weeks on the Week tab (unless typing in a box).

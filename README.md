@@ -12,8 +12,9 @@ The site is static (GitHub Pages). Firebase holds the data, and `firestore.rules
 | File | What it does |
 | --- | --- |
 | `index.html`, `styles.css` | Page shell and look |
-| `app.js` | Screens: front page, class lists, and each class's tabs (Home, Lessons, Planner, Week, Timetable, Setup) |
+| `app.js` | Screens: front page, class lists, and each class's tabs (Home, Lessons, Planner, Week, Timetable, Tracker, Reports, Setup) |
 | `planner.js` | The scheduling engine (the spreadsheet's rules). No Firebase, no DOM |
+| `tracker.js` | Tracker maths: grading scale, assessment and homework columns, averages and report figures. No Firebase, no DOM |
 | `firebase.js` | Firebase sign-in and data. Loaded only when `config.js` has settings |
 | `demo.js` | Same interface as `firebase.js`, saved in the browser, with a sample class |
 | `files.js` | Lesson file rules shared by both stores: allowed types, 50 MB limit, when a teacher-only file opens |
@@ -56,7 +57,7 @@ npm install
 npm test
 ```
 
-`npm test` runs the planner tests, the security rules tests in the Firestore emulator, the Storage rules tests, and an end-to-end test of `firebase.js` (classes, keys and lesson files) against the Auth, Firestore and Storage emulators. The emulators need Java 11 or newer. The same tests run on every pull request (`.github/workflows/tests.yml`).
+`npm test` runs the planner and tracker tests, the security rules tests in the Firestore emulator, the Storage rules tests, and an end-to-end test of `firebase.js` (classes, keys and lesson files) against the Auth, Firestore and Storage emulators. The emulators need Java 11 or newer. The same tests run on every pull request (`.github/workflows/tests.yml`).
 
 ## Build phases
 
@@ -64,5 +65,5 @@ npm test
 2. Live planner: terms, meeting pattern, events, drag-and-drop lessons, auto-schedule, capacity banner, student lesson list and timetable. **Done**
 3. Materials: uploads per lesson (PDF, PowerPoint, Word, pictures, up to 50 MB), downloads, teacher-only files that open on a date or when the teacher flips the switch. **Done**
    - Class page overhaul: a Home tab (class details, teacher contact, announcements, this week, coming up), a Lessons library of units and lessons with a lesson builder, and a Planner that searches the library to fill each term. Shift-drag moves a run of lessons from one unit together. **Done**
-4. Tracker and reports.
+4. Tracker and reports: class list (names only), a grading scale per class (the 6-level standards by default), assessment marks and homework ticks with a column for every lesson ticked Assessment or Homework, and three printable reports (student, class summary, assessment analysis). Only the class's teacher can read any of it. **Done**
 5. Templates, export, delete.
