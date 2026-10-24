@@ -1,0 +1,104 @@
+// End-to-end test of firebase.js against the Auth and Firestore emulators, with the real rules.
+// firebase.js imports Firebase from the CDN, so this copies it with the imports pointed at
+// the npm package, the emulators connected, and Google's pop-up swapped for an emulator token.
+// Run with: npm run test:store
+import { test, before } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+
+const here = new URL('./', import.meta.url);
+let createFirebaseStore;
+
+before(async () => {
+  let src = readFileSync(new URL('../firebase.js', import.meta.url), 'utf8');
+  src = src
+    .replace('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js', 'firebase/app')
+    .replace('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js', 'firebase/auth')
+    .replace('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js', 'firebase/firestore')
+    .replace("'./keys.js'", `'${new URL('../keys.js', import.meta.url)}'`)
+    .replace("'./planner.js'", `'${new URL('../planner.js', import.meta.url)}'`)
+    .replace('initializeApp(config)', 'initializeApp(config, config.appName)')
+    .replace('const db = getFirestore(app);', `const db = getFirestore(app);
+  connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+  connectFirestoreEmulator(db, '127.0.0.1', 8080);`)
+    .replace('signInWithPopup(auth, new GoogleAuthProvider())', 'signInWithCredential(auth, GoogleAuthProvider.credential(config.fakeGoogleToken))');
+  src = `import { connectAuthEmulator, signInWithCredential } from 'firebase/auth';
+import { connectFirestoreEmulator } from 'firebase/firestore';
+${src}`;
+  for (const needle of ['firebase/app', 'connectAuthEmulator(auth', 'signInWithCredential(auth', 'config.appName']) {
+    assert.ok(src.includes(needle), `patch failed: ${needle}`);
+  }
+  mkdirSync(new URL('.tmp/', here), { recursive: true });
+  const out = new URL('.tmp/firebase.node.js', here);
+  writeFileSync(out, src);
+  ({ createFirebaseStore } = await import(out));
+});
+
+const config = (appName, token) => ({
+  apiKey: 'demo-key', authDomain: 'demo-termwise.firebaseapp.com', projectId: 'demo-termwise', appName,
+  fakeGoogleToken: token && JSON.stringify(token),
+});
+
+function waitForUser(store) {
+  return new Promise((resolve) => {
+    const off = store.onAuth((u) => { if (u) { off(); resolve(u); } });
+  });
+}
+
+test('teacher creates a class, a student joins, the key is regenerated, the class is archived', async () => {
+  const run = Date.now();
+  const teacher = createFirebaseStore(config(`t${run}`, { sub: `gabe${run}`, email: 'gabe@example.com', name: 'Gabe' }));
+  await teacher.signInTeacher();
+  const tu = await waitForUser(teacher);
+  assert.equal(tu.isTeacher, true);
+
+  const id = await teacher.createClass({ name: '8A Maths', subject: 'Maths', year: '2027', colour: 2 });
+  const mine = await teacher.listMyClasses();
+  assert.deepEqual(mine.map((c) => c.id), [id]);
+  const cls = await teacher.getClass(id);
+  assert.match(cls.currentKey, /^[A-HJKMNP-Z2-9]{8}$/);
+
+  const plan = await teacher.getPlan(id);
+  plan.pattern = ['1-1', '3-2'];
+  plan.terms[0] = { start: '2027-01-27', weeks: 10 };
+  await teacher.savePlan(id, plan);
+  const a = { id: teacher.newLessonId(id), title: '1A', periods: 2, order: 0, assessment: false, homework: false };
+  const b = { id: teacher.newLessonId(id), title: '1B', periods: 1, order: 1, assessment: false, homework: false };
+  await teacher.saveLesson(id, a);
+  await teacher.saveLesson(id, b);
+  await teacher.saveOrder(id, [b, a]);
+  assert.deepEqual((await teacher.getLessons(id)).map((l) => l.title), ['1B', '1A']);
+
+  // Student joins with the key.
+  const student = createFirebaseStore(config(`s${run}`));
+  assert.equal(await student.joinWithKey('ABCD2345'), null, 'unknown key');
+  const joined = await student.joinWithKey(cls.currentKey);
+  assert.equal(joined, id);
+  assert.equal((await student.getClass(id)).name, '8A Maths');
+  assert.deepEqual((await student.getLessons(id)).map((l) => l.title), ['1B', '1A']);
+  assert.deepEqual((await student.getPlan(id)).pattern, ['1-1', '3-2']);
+
+  // New key: the student is cut off until they enter it.
+  const newKey = await teacher.regenerateKey(id);
+  assert.notEqual(newKey, cls.currentKey);
+  assert.equal(await student.getClass(id), null);
+  assert.equal(await student.joinWithKey(cls.currentKey), null, 'old key no longer works');
+  assert.equal(await student.joinWithKey(newKey), id);
+  assert.ok(await student.getClass(id));
+
+  // Archive: cut off at once; restore lets the same key work again.
+  await teacher.setArchived(id, true);
+  assert.equal(await student.getClass(id), null);
+  assert.equal(await student.joinWithKey(newKey), null);
+  await teacher.setArchived(id, false);
+  assert.equal(await student.joinWithKey(newKey), id);
+
+  // Another teacher can't see it.
+  const other = createFirebaseStore(config(`o${run}`, { sub: `other${run}`, email: 'o@example.com' }));
+  await other.signInTeacher();
+  assert.equal(await other.getClass(id), null);
+  assert.deepEqual(await other.listMyClasses(), []);
+
+  await teacher.deleteLesson(id, a.id);
+  assert.deepEqual((await teacher.getLessons(id)).map((l) => l.title), ['1B']);
+});
