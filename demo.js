@@ -1,0 +1,179 @@
+// Demo store: the same interface as firebase.js, saved in this browser's localStorage.
+// Used when config.js has no Firebase settings, so the site works on first open.
+
+import { newKey } from './keys.js';
+import { emptyPlan } from './planner.js';
+
+const DATA_KEY = 'termwise-demo-v1';
+const USER_KEY = 'termwise-demo-user-v1';
+const memory = {};
+
+function load(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch { return key in memory ? memory[key] : fallback; }
+}
+function save(key, value) {
+  memory[key] = value;
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage blocked: keep in memory */ }
+}
+
+const uid = () => Math.random().toString(36).slice(2, 12);
+
+/* ---------- sample class ---------- */
+
+const SAMPLE_UNITS = [
+  ['Integers', ['Ordering integers', 'Adding and subtracting', 'Multiplying and dividing', 'Order of operations']],
+  ['Fractions', ['Equivalent fractions', 'Adding fractions', 'Multiplying fractions', 'Dividing fractions', 'Mixed numbers']],
+  ['Decimals and percentages', ['Decimal place value', 'Fractions to percentages', 'Percentage of an amount', 'Percentage change']],
+  ['Algebra', ['Pronumerals', 'Substitution', 'Like terms', 'Expanding brackets', 'Factorising']],
+  ['Linear equations', ['One-step equations', 'Two-step equations', 'Equations with brackets', 'Worded problems']],
+  ['Measurement', ['Perimeter', 'Area of rectangles and triangles', 'Area of composite shapes', 'Volume of prisms']],
+  ['Geometry', ['Angles on a line', 'Parallel lines', 'Triangles', 'Quadrilaterals']],
+  ['Statistics', ['Collecting data', 'Mean, median and mode', 'Graphs', 'Investigation']],
+  ['Ratios and rates', ['Simplifying ratios', 'Dividing in a ratio', 'Rates', 'Best buys']],
+  ['Index laws', ['Index notation', 'Multiplying and dividing powers', 'Zero and negative indices']],
+  ['Probability', ['Chance language', 'Theoretical probability', 'Experiments', 'Two-way tables']],
+  ['Pythagoras', ['Right-angled triangles', 'Finding the hypotenuse', 'Finding a shorter side', 'Problem solving']],
+];
+
+export function sampleClass() {
+  const lessons = [];
+  SAMPLE_UNITS.forEach(([unit, names], u) => {
+    names.forEach((n, i) => lessons.push({
+      title: `${u + 1}${String.fromCharCode(65 + i)} ${n}`,
+      periods: [2, 3, 2, 2, 3][i % 5],
+      homework: i % 2 === 0,
+    }));
+    lessons.push({ title: `${unit} review`, periods: 2 });
+    lessons.push({ title: `${unit} test`, periods: 1, assessment: true });
+  });
+  const plan = emptyPlan();
+  // Sample dates only (Victorian 2026 term starts). Change them on the Setup tab.
+  plan.terms = [
+    { start: '2026-01-28', weeks: 10 },
+    { start: '2026-04-20', weeks: 10 },
+    { start: '2026-07-13', weeks: 10 },
+    { start: '2026-10-05', weeks: 11 },
+  ];
+  plan.pattern = ['1-2', '2-4', '4-1', '5-3'];
+  plan.events = [
+    { id: uid(), term: 1, week: 7, day: 1, period: 'All', label: 'Labour Day' },
+    { id: uid(), term: 1, week: 9, day: 'All', period: 'All', label: 'Year 8 camp' },
+    { id: uid(), term: 2, week: 4, day: 4, period: 'All', label: 'Athletics carnival' },
+    { id: uid(), term: 3, week: 6, day: 2, period: 4, label: 'Excursion' },
+    { id: uid(), term: 4, week: 4, day: 5, period: 3, label: 'Assembly' },
+  ];
+  return {
+    name: '8A Maths', subject: 'Maths', year: '2026', colour: 0,
+    plan,
+    lessons: lessons.map((l, i) => ({ id: uid(), order: i, assessment: false, homework: false, ...l })),
+  };
+}
+
+/* ---------- the store ---------- */
+
+export function createDemoStore() {
+  let data = load(DATA_KEY, null);
+  if (!data) {
+    const s = sampleClass();
+    const key = newKey();
+    data = {
+      classes: { sample: { name: s.name, subject: s.subject, year: s.year, colour: s.colour, owner: 'demo-teacher', currentKey: key, archived: false, createdAt: Date.now() } },
+      plans: { sample: s.plan },
+      lessons: { sample: s.lessons },
+      members: {},
+    };
+    save(DATA_KEY, data);
+  }
+  const persist = () => save(DATA_KEY, data);
+  let listeners = [];
+  const userFor = (role) => role === 'teacher'
+    ? { uid: 'demo-teacher', name: 'Demo teacher', email: '', isTeacher: true }
+    : role === 'student' ? { uid: 'demo-student', name: '', email: '', isTeacher: false } : null;
+  let user = userFor(load(USER_KEY, null));
+  const setUser = (role) => {
+    save(USER_KEY, role);
+    user = userFor(role);
+    listeners.forEach((cb) => cb(user));
+  };
+  const canRead = (id) => {
+    const c = data.classes[id];
+    if (!c || !user) return false;
+    if (c.owner === user.uid) return true;
+    return !c.archived && data.members[`${id}/${user.uid}`] === c.currentKey;
+  };
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  return {
+    mode: 'demo',
+    // Shown on the front page so the sample can be tried as a student.
+    sampleKey: () => (data.classes.sample && !data.classes.sample.archived ? data.classes.sample.currentKey : ''),
+
+    onAuth(cb) {
+      listeners.push(cb);
+      setTimeout(() => cb(user), 0);
+      return () => { listeners = listeners.filter((l) => l !== cb); };
+    },
+    async signInTeacher() { setUser('teacher'); },
+    async signOut() { setUser(null); },
+
+    async listMyClasses() {
+      await tick();
+      return Object.entries(data.classes).filter(([, c]) => c.owner === user.uid).map(([id, c]) => ({ id, ...c }));
+    },
+    async createClass({ name, subject, year, colour }) {
+      const id = uid();
+      data.classes[id] = { name, subject, year, colour, owner: user.uid, currentKey: newKey(), archived: false, createdAt: Date.now() };
+      data.plans[id] = emptyPlan();
+      data.lessons[id] = [];
+      persist();
+      return id;
+    },
+    async getClass(id) {
+      await tick();
+      return canRead(id) ? { id, ...data.classes[id] } : null;
+    },
+    async updateClass(id, patch) { Object.assign(data.classes[id], patch); persist(); },
+    async regenerateKey(id) {
+      const key = newKey();
+      data.classes[id].currentKey = key;
+      persist();
+      return key;
+    },
+    async setArchived(id, archived) { data.classes[id].archived = archived; persist(); },
+
+    async getPlan(id) { return structuredClone({ ...emptyPlan(), ...(data.plans[id] || {}) }); },
+    async savePlan(id, plan) { data.plans[id] = structuredClone(plan); persist(); },
+    async getLessons(id) {
+      return structuredClone((data.lessons[id] || []).slice().sort((a, b) => a.order - b.order));
+    },
+    newLessonId() { return uid(); },
+    async saveLesson(id, lesson) {
+      const list = data.lessons[id];
+      const i = list.findIndex((l) => l.id === lesson.id);
+      if (i >= 0) list[i] = structuredClone(lesson); else list.push(structuredClone(lesson));
+      persist();
+    },
+    async deleteLesson(id, lessonId) {
+      data.lessons[id] = data.lessons[id].filter((l) => l.id !== lessonId);
+      persist();
+    },
+    async saveOrder(id, lessons) {
+      const pos = new Map(lessons.map((l, i) => [l.id, i]));
+      data.lessons[id].forEach((l) => { if (pos.has(l.id)) l.order = pos.get(l.id); });
+      persist();
+    },
+
+    async joinWithKey(key) {
+      await tick();
+      if (!user) setUser('student');
+      const entry = Object.entries(data.classes).find(([, c]) => c.currentKey === key && !c.archived);
+      if (!entry) return null;
+      data.members[`${entry[0]}/${user.uid}`] = key;
+      persist();
+      return entry[0];
+    },
+  };
+}

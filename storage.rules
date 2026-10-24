@@ -1,0 +1,11 @@
+rules_version = '2';
+
+// Termwise Storage rules. File uploads arrive in Phase 3 (lesson materials).
+// Until then nothing can be read or written.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
