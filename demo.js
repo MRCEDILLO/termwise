@@ -4,7 +4,7 @@
 import { newKey } from './keys.js';
 import { emptyPlan } from './planner.js';
 
-const DATA_KEY = 'termwise-demo-v2';
+const DATA_KEY = 'termwise-demo-v3';
 const USER_KEY = 'termwise-demo-user-v1';
 const memory = {};
 
@@ -39,18 +39,24 @@ const SAMPLE_UNITS = [
 ];
 
 export function sampleClass() {
+  const units = [];
   const lessons = [];
   SAMPLE_UNITS.forEach(([unit, names], u) => {
+    const unitId = uid();
+    units.push({ id: unitId, name: `${u + 1}. ${unit}`, order: u });
     const term = Math.floor(u / 3) + 1; // three units a term
     names.forEach((n, i) => lessons.push({
-      term,
+      unitId, term,
       title: `${u + 1}${String.fromCharCode(65 + i)} ${n}`,
+      description: i === 0 ? `First lesson of the ${unit.toLowerCase()} unit. Bring your exercise book and calculator.` : '',
       periods: [2, 3, 2, 2, 3][i % 5],
       homework: i % 2 === 0,
     }));
-    lessons.push({ term, title: `${unit} review`, periods: 2 });
-    lessons.push({ term, title: `${unit} test`, periods: 1, assessment: true });
+    lessons.push({ unitId, term, title: `${unit} review`, periods: 2, description: 'Practice questions from the whole unit.' });
+    lessons.push({ unitId, term, title: `${unit} test`, periods: 1, assessment: true });
   });
+  // One lesson that isn't on the planner yet, to show the library and search.
+  lessons.push({ unitId: units[0].id, term: null, title: 'Integers extension: number puzzles', periods: 1 });
   const plan = emptyPlan();
   // Sample dates only (Victorian 2026 term starts). Change them on the Setup tab.
   plan.terms = [
@@ -69,8 +75,13 @@ export function sampleClass() {
   ];
   return {
     name: '8A Maths', subject: 'Maths', year: '2026', colour: 0,
+    teacher: 'Mr Cedillo', contact: 'teacher@school.vic.edu.au', about: 'Year 8 Mathematics. Lessons are in A12 unless your timetable says otherwise.',
     plan,
-    lessons: lessons.map((l, i) => ({ id: uid(), order: i, assessment: false, homework: false, ...l })),
+    units,
+    lessons: lessons.map((l, i) => ({ id: uid(), order: i, description: '', assessment: false, homework: false, ...l })),
+    announcements: [
+      { id: uid(), text: 'Welcome to 8A Maths! Every lesson\'s slides and worksheets are on the Lessons tab.', createdAt: Date.now() - 86400000 * 3 },
+    ],
   };
 }
 
@@ -82,9 +93,14 @@ export function createDemoStore() {
     const s = sampleClass();
     const key = newKey();
     data = {
-      classes: { sample: { name: s.name, subject: s.subject, year: s.year, colour: s.colour, owner: 'demo-teacher', currentKey: key, archived: false, createdAt: Date.now() } },
+      classes: { sample: {
+        name: s.name, subject: s.subject, year: s.year, colour: s.colour, teacher: s.teacher, contact: s.contact, about: s.about,
+        owner: 'demo-teacher', currentKey: key, archived: false, createdAt: Date.now(),
+      } },
       plans: { sample: s.plan },
+      units: { sample: s.units },
       lessons: { sample: s.lessons },
+      announcements: { sample: s.announcements },
       members: {},
     };
     save(DATA_KEY, data);
@@ -128,9 +144,11 @@ export function createDemoStore() {
     },
     async createClass({ name, subject, year, colour }) {
       const id = uid();
-      data.classes[id] = { name, subject, year, colour, owner: user.uid, currentKey: newKey(), archived: false, createdAt: Date.now() };
+      data.classes[id] = { name, subject, year, colour, teacher: user.name, owner: user.uid, currentKey: newKey(), archived: false, createdAt: Date.now() };
       data.plans[id] = emptyPlan();
+      data.units[id] = [];
       data.lessons[id] = [];
+      data.announcements[id] = [];
       persist();
       return id;
     },
@@ -166,6 +184,36 @@ export function createDemoStore() {
     async saveOrder(id, lessons) {
       const pos = new Map(lessons.map((l, i) => [l.id, i]));
       data.lessons[id].forEach((l) => { if (pos.has(l.id)) l.order = pos.get(l.id); });
+      persist();
+    },
+
+    async getUnits(id) {
+      return structuredClone((data.units[id] || []).slice().sort((a, b) => a.order - b.order));
+    },
+    newUnitId() { return uid(); },
+    async saveUnit(id, unit) {
+      const list = (data.units[id] ||= []);
+      const i = list.findIndex((u) => u.id === unit.id);
+      if (i >= 0) list[i] = structuredClone(unit); else list.push(structuredClone(unit));
+      persist();
+    },
+    async deleteUnit(id, unitId, lessonIds) {
+      data.units[id] = data.units[id].filter((u) => u.id !== unitId);
+      data.lessons[id].forEach((l) => { if (lessonIds.includes(l.id)) l.unitId = null; });
+      persist();
+    },
+
+    async getAnnouncements(id) {
+      return structuredClone((data.announcements[id] || []).slice().sort((a, b) => b.createdAt - a.createdAt));
+    },
+    async addAnnouncement(id, text) {
+      const post = { id: uid(), text, createdAt: Date.now() };
+      (data.announcements[id] ||= []).push(post);
+      persist();
+      return { ...post };
+    },
+    async deleteAnnouncement(id, postId) {
+      data.announcements[id] = data.announcements[id].filter((p) => p.id !== postId);
       persist();
     },
 

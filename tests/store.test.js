@@ -83,6 +83,24 @@ test('teacher creates a class, a student joins, the key is regenerated, the clas
   assert.deepEqual((await student.getLessons(id)).map((l) => l.title), ['1B', '1A']);
   assert.deepEqual((await student.getPlan(id)).pattern, ['1-1', '3-2']);
 
+  // Units, a lesson kept off the planner, and an announcement: the student reads them, can't post.
+  const unit = { id: teacher.newUnitId(id), name: 'Integers', order: 0 };
+  await teacher.saveUnit(id, unit);
+  const spare = { id: teacher.newLessonId(id), title: 'Extension', description: 'Puzzles', unitId: unit.id, periods: 1, order: 2, term: null, assessment: false, homework: false };
+  await teacher.saveLesson(id, spare);
+  await teacher.updateClass(id, { teacher: 'Mr Cedillo', contact: 'gabe@example.com', about: 'Room A12' });
+  const post = await teacher.addAnnouncement(id, 'Welcome!');
+  assert.deepEqual((await student.getUnits(id)).map((u) => u.name), ['Integers']);
+  assert.equal((await student.getLessons(id)).find((l) => l.id === spare.id).term, null);
+  assert.equal((await student.getClass(id)).contact, 'gabe@example.com');
+  assert.deepEqual((await student.getAnnouncements(id)).map((x) => x.text), ['Welcome!']);
+  await assert.rejects(student.addAnnouncement(id, 'No homework!'));
+  await teacher.deleteUnit(id, unit.id, [spare.id]);
+  assert.equal((await teacher.getLessons(id)).find((l) => l.id === spare.id).unitId, null);
+  await teacher.deleteAnnouncement(id, post.id);
+  assert.deepEqual(await student.getAnnouncements(id), []);
+  await teacher.deleteLesson(id, spare.id);
+
   // Files: an ordinary file opens; a teacher-only one stays shut until the switch is flipped.
   const pdf = (name) => new File([new Uint8Array([37, 80, 68, 70])], name);
   const sheet = await teacher.uploadFile(id, a.id, pdf('Worksheet.pdf'));

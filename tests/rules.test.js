@@ -206,3 +206,34 @@ test('teacher profile is private to that teacher', async () => {
   await assertFails(getDoc(doc(teacher('other'), 'teachers/gabe')));
   await assertFails(setDoc(doc(student('gabe'), 'teachers/gabe'), { name: 'x' }));
 });
+
+/* ---------- class home page: contact details, units, announcements ---------- */
+
+test('the teacher\'s name, contact details and about text are short plain text', async () => {
+  const db = teacher('gabe');
+  await assertSucceeds(updateDoc(doc(db, 'classes/c1'), { teacher: 'Mr Cedillo', contact: 'gabe@school.vic.edu.au', about: 'Year 8 maths.' }));
+  await assertFails(updateDoc(doc(db, 'classes/c1'), { contact: 'x'.repeat(201) }));
+  await assertFails(updateDoc(doc(db, 'classes/c1'), { about: 42 }));
+  await assertFails(updateDoc(doc(student('s1'), 'classes/c1'), { contact: 'hacked' }));
+});
+
+test('members read units and announcements, only the owner writes them', async () => {
+  const t = teacher('gabe');
+  await assertSucceeds(setDoc(doc(t, 'classes/c1/units/u1'), { name: 'Fractions', order: 0 }));
+  await assertSucceeds(setDoc(doc(t, 'classes/c1/announcements/a1'), { text: 'Test on Friday', createdAt: Date.now() }));
+  const s = student('s1');
+  await assertSucceeds(getDocs(collection(s, 'classes/c1/units')));
+  await assertSucceeds(getDocs(collection(s, 'classes/c1/announcements')));
+  await assertFails(setDoc(doc(s, 'classes/c1/units/u2'), { name: 'Mine', order: 1 }));
+  await assertFails(setDoc(doc(s, 'classes/c1/announcements/a2'), { text: 'No homework!', createdAt: Date.now() }));
+  await assertFails(deleteDoc(doc(s, 'classes/c1/announcements/a1')));
+  await assertFails(getDocs(collection(student('stranger'), 'classes/c1/announcements')));
+});
+
+test('announcements are text only', async () => {
+  const t = teacher('gabe');
+  await assertFails(setDoc(doc(t, 'classes/c1/announcements/a3'), { text: '' }));
+  await assertFails(setDoc(doc(t, 'classes/c1/announcements/a4'), { text: 'Hi', pinned: true }));
+  await assertFails(setDoc(doc(t, 'classes/c1/announcements/a5'), { text: 'x'.repeat(4001) }));
+  await assertSucceeds(deleteDoc(doc(t, 'classes/c1/announcements/a3')));
+});

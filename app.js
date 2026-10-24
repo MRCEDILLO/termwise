@@ -6,7 +6,7 @@ import { createDemoStore } from './demo.js';
 import { normaliseKey, formatKey } from './keys.js';
 import { ACCEPT, fileProblem, isOpen, fileSize, fileIcon } from './files.js';
 import {
-  schedule, emptyPlan, isAssessmentLike, currentWeek, weekRange, slotLabel, cellText, lessonTerm, slotDate,
+  schedule, emptyPlan, isAssessmentLike, currentWeek, weekRange, slotLabel, cellText, slotDate,
   DAYS, PERIODS_PER_DAY, MAX_WEEKS, TERM_COUNT, clampWeeks,
 } from './planner.js';
 
@@ -15,7 +15,7 @@ const store = FIREBASE_CONFIG.apiKey
   : createDemoStore();
 
 const $app = document.getElementById('app');
-const state = { user: undefined, cls: null, view: 'edit' };
+const state = { user: undefined, cls: null };
 
 export const CLASS_COLOURS = ['#1F6FD1', '#0D8466', '#C2410C', '#7C3AED', '#BE185D', '#0E7490', '#4D7C0F', '#A16207'];
 const colourOf = (c) => CLASS_COLOURS[(Number(c && c.colour) || 0) % CLASS_COLOURS.length];
@@ -48,7 +48,6 @@ const todayISO = () => {
 const fmt = (iso, opts) => (iso ? new Date(`${iso}T00:00:00`).toLocaleDateString('en-AU', opts) : '');
 const fmtDay = (iso) => fmt(iso, { weekday: 'short', day: 'numeric', month: 'short' });
 const fmtShort = (iso) => fmt(iso, { day: 'numeric', month: 'short' });
-const fmtLong = (iso) => fmt(iso, { weekday: 'long', day: 'numeric', month: 'long' });
 const rangeText = (r) => (r ? `${fmtShort(r.from)} – ${fmtShort(r.to)}` : '');
 
 /* ---------- small things ---------- */
@@ -112,7 +111,7 @@ function frame(body, { wide = false } = {}) {
 
 function parseHash() {
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
-  if (parts[0] === 'class' && parts[1]) return { page: 'class', id: parts[1], tab: parts[2] || '' };
+  if (parts[0] === 'class' && parts[1]) return { page: 'class', id: parts[1], tab: parts[2] || '', sub: parts[3] || '' };
   return { page: 'home' };
 }
 
@@ -122,7 +121,7 @@ async function route() {
     return;
   }
   const r = parseHash();
-  if (r.page === 'class') return showClass(r.id, r.tab);
+  if (r.page === 'class') return showClass(r.id, r.tab, r.sub);
   state.cls = null;
   if (!state.user) return showLanding();
   return state.user.isTeacher ? showTeacherHome() : showStudentHome();
@@ -182,7 +181,7 @@ async function showTeacherHome() {
     ${classes.length ? '' : html`<p class="empty">No classes yet. Make your first one with <strong>New class</strong>.</p>`}
     <div class="class-grid">
       ${classes.map((c) => html`
-        <a class="class-card ${c.archived ? 'archived' : ''}" href="#/class/${c.id}/lessons">
+        <a class="class-card ${c.archived ? 'archived' : ''}" href="#/class/${c.id}">
           <div class="class-card-banner" style="--class:${colourOf(c)}">
             <span class="class-card-name">${c.name}</span>
             <span class="class-card-sub">${[c.subject, c.year].filter(Boolean).join(' · ')}</span>
@@ -230,7 +229,7 @@ function showStudentHome() {
     ${joined.length ? html`
       <div class="class-grid">
         ${joined.map((j) => html`
-          <a class="class-card" href="#/class/${j.classId}/week">
+          <a class="class-card" href="#/class/${j.classId}">
             <div class="class-card-banner" style="--class:${CLASS_COLOURS[j.colour || 0] || CLASS_COLOURS[0]}">
               <span class="class-card-name">${j.name || 'Class'}</span>
               <span class="class-card-sub">${j.subject || ''}</span>
@@ -260,7 +259,7 @@ async function joinClass(form) {
     const list = getJoined().filter((j) => j.classId !== classId);
     list.push({ classId, key, name: cls.name, subject: cls.subject, colour: cls.colour || 0 });
     setJoined(list);
-    location.hash = `#/class/${classId}/week`;
+    location.hash = `#/class/${classId}`;
   } catch (e) {
     console.error(e);
     msg.textContent = "Couldn't reach the server. Check your connection and try again.";
@@ -272,7 +271,7 @@ async function joinClass(form) {
 
 /* ---------- class page ---------- */
 
-async function showClass(id, tab) {
+async function showClass(id, tab, sub = '') {
   if (!state.user) { location.hash = '#/'; return; }
   if (!state.cls || state.cls.id !== id) {
     show($app, frame(html`<div class="loading">Opening class…</div>`, { wide: true }));
@@ -288,21 +287,27 @@ async function showClass(id, tab) {
         </section>`));
       return;
     }
-    const [plan, lessons, files] = await Promise.all([
-      store.getPlan(id), store.getLessons(id),
-      store.listFiles(id).catch((e) => { console.error(e); return []; }),
+    const quiet = (p) => p.catch((e) => { console.error(e); return []; });
+    const [plan, lessons, units, files, posts] = await Promise.all([
+      store.getPlan(id), store.getLessons(id), quiet(store.getUnits(id)),
+      quiet(store.listFiles(id)), quiet(store.getAnnouncements(id)),
     ]);
-    state.cls = { id, cls, plan, lessons, files, uploads: [], isOwner: cls.owner === state.user.uid };
-    sortByTerm(state.cls);
+    // Lessons saved before terms were chosen are Term 1; a null term means "not on the planner".
+    lessons.forEach((l) => { if (l.term === undefined) l.term = 1; });
+    state.cls = { id, cls, plan, lessons, units, files, posts, uploads: [], collapsed: new Set(), isOwner: cls.owner === state.user.uid };
+    sortLessons(state.cls);
     state.cls.editTerm = (currentWeek(plan, todayISO()) || { term: 1 }).term;
     recompute();
   }
   const c = state.cls;
   const tabs = c.isOwner
-    ? [['week', 'Week'], ['lessons', 'Lessons'], ['timetable', 'Timetable'], ['setup', 'Setup']]
-    : [['week', 'Week'], ['lessons', 'Lessons'], ['timetable', 'Timetable']];
-  if (!tabs.some(([t]) => t === tab)) tab = c.isOwner ? 'lessons' : 'week';
+    ? [['home', 'Home'], ['lessons', 'Lessons'], ['planner', 'Planner'], ['week', 'Week'], ['timetable', 'Timetable'], ['setup', 'Setup']]
+    : [['home', 'Home'], ['week', 'Week'], ['lessons', 'Lessons'], ['timetable', 'Timetable']];
+  if (!tabs.some(([t]) => t === tab)) tab = 'home';
+  const lessonId = tab === 'lessons' && sub && c.lessons.some((l) => l.id === sub) ? sub : null;
+  if (lessonId !== c.lessonId) c.preview = false;
   c.tab = tab;
+  c.lessonId = lessonId;
   show($app, frame(html`
     <section class="class-banner" style="--class:${colourOf(c.cls)}">
       <div>
@@ -321,18 +326,33 @@ async function showClass(id, tab) {
 
 function recompute() {
   const c = state.cls;
-  c.result = schedule(c.plan, c.lessons);
+  c.result = schedule(c.plan, c.lessons.filter(isPlaced));
+  c.placed = new Map(c.result.lessons.map((l) => [l.id, l]));
 }
 
 function renderPanel() {
   const c = state.cls;
   const panel = document.getElementById('panel');
   if (!panel) return;
-  if (c.tab === 'timetable') show(panel, timetablePanel(c));
-  else if (c.tab === 'setup') show(panel, setupPanel(c));
-  else if (c.tab === 'week') show(panel, weekCalendar(c));
-  else if (c.isOwner && state.view === 'edit') show(panel, lessonEditor(c));
-  else show(panel, weekList(c));
+  const views = { home: homePanel, lessons: libraryPanel, planner: plannerPanel, week: weekCalendar, timetable: timetablePanel, setup: setupPanel };
+  show(panel, views[c.tab](c));
+  if (c.tab === 'lessons') {
+    applyLibFilter();
+    // Keep the sidebar where it was, and the chosen lesson in view.
+    const side = document.querySelector('.lib-side');
+    if (side) {
+      side.scrollTop = c.libScroll || 0;
+      const on = side.querySelector('a.on');
+      if (on && (on.offsetTop < side.scrollTop || on.offsetTop + on.offsetHeight > side.scrollTop + side.clientHeight)) {
+        side.scrollTop = on.offsetTop - side.clientHeight / 3;
+      }
+    }
+    if (c.focusTitle) {
+      c.focusTitle = false;
+      const t = document.querySelector('.builder-title');
+      if (t) { t.focus(); t.select(); }
+    }
+  }
 }
 
 /* ---------- capacity banner ---------- */
@@ -359,7 +379,7 @@ function termBanner(r, t) {
   }
   if (!t.required) {
     return html`<div class="banner info" role="status"><span class="banner-icon" aria-hidden="true">i</span>
-      <span>Add your Term ${t.term} lessons to get started. ${plural(t.available, 'class period')} are free this term.</span></div>`;
+      <span>Add lessons to Term ${t.term} with the search box below. ${plural(t.available, 'class period')} are free this term.</span></div>`;
   }
   if (t.fits) {
     return html`<div class="banner good" role="status"><span class="banner-icon" aria-hidden="true">✓</span>
@@ -374,7 +394,7 @@ function yearBanner(r) {
   if (!r.meetingsPerWeek) return setupFirstBanner();
   if (!r.required) {
     return html`<div class="banner info" role="status"><span class="banner-icon" aria-hidden="true">i</span>
-      <span>Add lessons on the <strong>Lessons</strong> tab to fill the timetable.</span></div>`;
+      <span>Put lessons on the <strong>Planner</strong> tab to fill the timetable.</span></div>`;
   }
   const short = r.perTerm.filter((t) => !t.fits);
   if (!short.length) {
@@ -382,20 +402,145 @@ function yearBanner(r) {
       <span><strong>All lessons fit.</strong> ${r.required} of ${r.available} periods used this year, ${r.spare} spare.</span></div>`;
   }
   return html`<div class="banner bad" role="status"><span class="banner-icon" aria-hidden="true">!</span>
-    <span><strong>${short.map((t) => `Term ${t.term} is short by ${plural(-t.spare, 'period')}`).join('. ')}.</strong> Fix it on the Lessons tab.</span></div>`;
+    <span><strong>${short.map((t) => `Term ${t.term} is short by ${plural(-t.spare, 'period')}`).join('. ')}.</strong> Fix it on the Planner tab.</span></div>`;
 }
 
-/* ---------- lessons: teacher editor ---------- */
+/* ---------- lessons and units: shared helpers ---------- */
+
+const lessonById = (id) => state.cls.lessons.find((l) => l.id === id);
+const unitById = (id) => state.cls.units.find((u) => u.id === id);
+const lessonUrl = (c, id) => `#/class/${c.id}/lessons/${id}`;
+const nextOrder = (c) => (c.lessons.length ? Math.max(...c.lessons.map((l) => l.order ?? 0)) + 1 : 0);
+const clampPeriods = (v) => Math.max(0, Math.min(20, Math.floor(Number(v)) || 0));
+
+// A lesson with no term is in the library but not on the planner.
+const isPlaced = (l) => l.term >= 1 && l.term <= TERM_COUNT;
+
+// The lesson's unit, or null if it has none (or its unit was deleted).
+const unitIdOf = (c, l) => (l.unitId && c.units.some((u) => u.id === l.unitId) ? l.unitId : null);
+const unitLessons = (c, unitId) => c.lessons.filter((l) => unitIdOf(c, l) === unitId);
+const unitColour = (c, unitId) => {
+  const i = c.units.findIndex((u) => u.id === unitId);
+  return i < 0 ? 'var(--line-2)' : CLASS_COLOURS[i % CLASS_COLOURS.length];
+};
+
+// Timeline order: placed lessons by term, then the rest. Numbered 0, 1, 2…
+function sortLessons(c) {
+  const key = (l) => (isPlaced(l) ? l.term : TERM_COUNT + 1);
+  c.lessons.sort((a, b) => key(a) - key(b) || (a.order ?? 0) - (b.order ?? 0));
+  c.lessons.forEach((l, i) => { l.order = i; });
+}
+
+function termLessons(c) {
+  return c.lessons.filter((l) => l.term === c.editTerm);
+}
+
+// Saves one field. The caller redraws, so typing in the lesson builder isn't interrupted.
+async function updateLesson(id, field, value) {
+  const lesson = lessonById(id);
+  if (!lesson) return;
+  if (field === 'periods') value = clampPeriods(value);
+  if (field === 'title') value = String(value).trim().slice(0, 200) || lesson.title;
+  if (field === 'description') value = String(value).slice(0, 5000);
+  if (field === 'unitId') value = value || null;
+  lesson[field] = value;
+  recompute();
+  await saving(store.saveLesson(state.cls.id, lesson));
+}
+
+// Puts lessons, in the order given, at the end of a term (or takes them off the planner when term is null).
+async function placeLessons(list, term, msg) {
+  const c = state.cls;
+  let order = nextOrder(c);
+  list.forEach((l) => { l.term = term; l.order = order++; });
+  sortLessons(c);
+  recompute();
+  renderPanel();
+  return saving(Promise.all([...list.map((l) => store.saveLesson(c.id, l)), store.saveOrder(c.id, c.lessons)]), msg);
+}
+
+async function createLessons(rows, { term = null, unitId = null } = {}, msg = 'Lesson created') {
+  const c = state.cls;
+  let order = nextOrder(c);
+  const added = rows.map((row) => ({
+    id: store.newLessonId(c.id),
+    title: row.title,
+    description: '',
+    unitId,
+    periods: row.periods ?? 1,
+    assessment: false,
+    homework: false,
+    term,
+    order: order++,
+  }));
+  c.lessons.push(...added);
+  sortLessons(c);
+  recompute();
+  renderPanel();
+  await saving(Promise.all([...added.map((l) => store.saveLesson(c.id, l)), store.saveOrder(c.id, c.lessons)]), msg);
+  return added;
+}
+
+function parsePasted(text) {
+  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+    const m = /^(.*?)[\t,]\s*(\d+)\s*$/.exec(line);
+    return m ? { title: m[1].trim().slice(0, 200), periods: Math.min(20, Number(m[2])) } : { title: line.slice(0, 200), periods: 1 };
+  }).filter((r) => r.title);
+}
+
+// Moves lessons (ids, already next to each other) so they sit before position toIndex of the term's list.
+async function reorder(ids, toIndex) {
+  const c = state.cls;
+  const list = termLessons(c);
+  const moving = new Set(ids);
+  const next = [
+    ...list.slice(0, toIndex).filter((l) => !moving.has(l.id)),
+    ...list.filter((l) => moving.has(l.id)),
+    ...list.slice(toIndex).filter((l) => !moving.has(l.id)),
+  ];
+  if (next.every((l, i) => l === list[i])) return;
+  const orders = list.map((l) => l.order); // the term keeps the same order numbers, shuffled
+  next.forEach((l, i) => { l.order = orders[i]; });
+  sortLessons(c);
+  recompute();
+  renderPanel();
+  await saving(store.saveOrder(c.id, c.lessons), ids.length > 1 ? `Moved ${ids.length} lessons` : 'Order saved');
+}
+
+// The lesson plus the lessons right next to it (same term) from the same unit, for Shift-moves.
+function unitBlock(c, id) {
+  const list = termLessons(c);
+  const i = list.findIndex((l) => l.id === id);
+  const unit = i >= 0 ? unitIdOf(c, list[i]) : null;
+  if (!unit) return [id];
+  let s = i;
+  let e = i;
+  while (s > 0 && unitIdOf(c, list[s - 1]) === unit) s--;
+  while (e < list.length - 1 && unitIdOf(c, list[e + 1]) === unit) e++;
+  return list.slice(s, e + 1).map((l) => l.id);
+}
+
+// When a placed lesson is taught: consecutive periods on one day are joined (Mon 12 May P2–3).
+function sessions(placed) {
+  const out = [];
+  for (const s of placed.slots) {
+    const last = out[out.length - 1];
+    if (last && last.date === s.date && last.day === s.day && last.to === s.period - 1) last.to = s.period;
+    else out.push({ term: s.term, week: s.week, day: s.day, date: s.date, from: s.period, to: s.period });
+  }
+  return out.map((x) => ({ ...x, text: `${x.date ? fmtDay(x.date) : `Wk ${x.week} ${DAYS[x.day - 1]}`} ${x.from === x.to ? `P${x.from}` : `P${x.from}–${x.to}`}` }));
+}
+
+// Plain text with web links made clickable. Everything else is escaped.
+function linkify(text) {
+  return raw(String(text || '').split(/(https?:\/\/[^\s<>"]+)/g)
+    .map((part, i) => (i % 2 ? `<a href="${esc(part)}" target="_blank" rel="noopener">${esc(part)}</a>` : esc(part)))
+    .join(''));
+}
+
+/* ---------- planner: put lessons from the library onto the terms ---------- */
 
 const statusText = (l) => ({ skipped: 'Skipped', noroom: `No room in Term ${l.term}`, overterm: `Runs past the end of Term ${l.term}` })[l.status];
-
-function viewToggle() {
-  return html`
-    <div class="seg" role="group" aria-label="Lesson view">
-      <button class="${state.view === 'edit' ? 'on' : ''}" aria-pressed="${state.view === 'edit'}" data-action="view" data-view="edit">Edit list</button>
-      <button class="${state.view === 'weeks' ? 'on' : ''}" aria-pressed="${state.view === 'weeks'}" data-action="view" data-view="weeks">Student view</button>
-    </div>`;
-}
 
 function termPicker(c) {
   return html`
@@ -408,7 +553,7 @@ function termPicker(c) {
     </div>`;
 }
 
-function lessonEditor(c) {
+function plannerPanel(c) {
   const r = c.result;
   const t = r.perTerm[c.editTerm - 1];
   const mine = r.lessons.filter((l) => l.term === c.editTerm);
@@ -426,16 +571,21 @@ function lessonEditor(c) {
     const when = l.start
       ? (l.start === l.end ? slotLabel(l.start) : `${slotLabel(l.start)} → Wk ${l.end.week} ${DAYS[l.end.day - 1]} P${l.end.period}`)
       : '';
+    const unitId = unitIdOf(c, l);
+    const unit = unitId && unitById(unitId);
+    const nFiles = filesFor(c, l.id).length;
     return html`${sep}
-      <li class="lesson ${l.status !== 'scheduled' ? `st-${l.status}` : ''} ${isAssessmentLike(l) ? 'assess' : ''}" data-id="${l.id}">
-        <span class="grip" aria-hidden="true" title="Drag to reorder">⋮⋮</span>
+      <li class="lesson ${l.status !== 'scheduled' ? `st-${l.status}` : ''} ${isAssessmentLike(l) ? 'assess' : ''}" data-id="${l.id}" style="--unit:${unitColour(c, unitId)}">
+        <span class="grip" draggable="true" aria-hidden="true" title="Drag to reorder. Hold Shift to bring the rest of the unit.">⋮⋮</span>
         <span class="num">${i + 1}</span>
         <div class="lesson-main">
-          <input class="title-input" data-field="title" value="${l.title}" aria-label="Lesson ${i + 1} title" maxlength="200">
+          <a class="lesson-title" href="${lessonUrl(c, l.id)}">${l.title}</a>
           <div class="lesson-meta">
+            ${unit ? html`<span class="unit-tag">${unit.name}</span>` : ''}
             ${when ? html`<span class="when">${when}</span>` : ''}
             ${statusText(l) ? html`<span class="tag ${l.status === 'skipped' ? '' : 'bad'}">${statusText(l)}</span>` : ''}
             ${isAssessmentLike(l) ? html`<span class="tag assess-tag">★ Assessment</span>` : ''}
+            ${nFiles ? html`<span class="file-count" title="${plural(nFiles, 'file')}">📎 ${nFiles}</span>` : ''}
           </div>
         </div>
         <label class="periods">Periods
@@ -444,121 +594,395 @@ function lessonEditor(c) {
         <label class="check as"><input type="checkbox" data-field="assessment" ${raw(l.assessment ? 'checked' : '')}> Assessment</label>
         <label class="check hw"><input type="checkbox" data-field="homework" ${raw(l.homework ? 'checked' : '')}> Homework</label>
         <label class="term-move">Term
-          <select data-field="term" aria-label="Move lesson ${i + 1} to another term">
+          <select data-field="term" aria-label="Move ${l.title} to another term">
             ${[1, 2, 3, 4].map((n) => html`<option value="${n}" ${raw(n === l.term ? 'selected' : '')}>${n}</option>`)}
           </select>
         </label>
         <div class="lesson-tools">
-          <button class="icon-btn" data-action="move" data-dir="-1" aria-label="Move lesson ${i + 1} up" ${raw(i === 0 ? 'disabled' : '')}>↑</button>
-          <button class="icon-btn" data-action="move" data-dir="1" aria-label="Move lesson ${i + 1} down" ${raw(i === mine.length - 1 ? 'disabled' : '')}>↓</button>
-          <button class="icon-btn danger" data-action="delete-lesson" aria-label="Delete lesson ${i + 1}">✕</button>
+          <button class="icon-btn" data-action="move" data-dir="-1" aria-label="Move ${l.title} up" ${raw(i === 0 ? 'disabled' : '')}>↑</button>
+          <button class="icon-btn" data-action="move" data-dir="1" aria-label="Move ${l.title} down" ${raw(i === mine.length - 1 ? 'disabled' : '')}>↓</button>
+          <button class="icon-btn danger" data-action="unplace" aria-label="Take ${l.title} off the planner" title="Take off the planner (it stays on the Lessons tab)">✕</button>
         </div>
-        ${teacherFiles(c, l)}
       </li>`;
   });
   return html`
-    <div class="panel-head">
-      <h2>Lessons</h2>
-      ${viewToggle()}
-    </div>
+    <div class="panel-head"><h2>Planner</h2></div>
     ${termPicker(c)}
     ${termBanner(r, t)}
-    <p class="hint">Drag cards, or use the arrows, to change the order. Set periods to 0 to skip a lesson. Later lessons move automatically. Use the Term box on a card to move it to another term.</p>
-    ${mine.length ? html`<ol class="lesson-list" data-list="lessons">${items}</ol>` : html`<p class="empty">No lessons in Term ${c.editTerm} yet.</p>`}
     <section class="card add-lessons">
-      <h3>Add lessons to Term ${c.editTerm}</h3>
-      <form class="add-row" data-form="add-lesson">
-        <label class="grow">New lesson <input name="title" required maxlength="200" placeholder="e.g. 3A Equivalent fractions"></label>
-        <label class="periods">Periods <input name="periods" type="number" min="0" max="20" value="1"></label>
-        <button class="btn primary" type="submit">Add lesson</button>
-      </form>
+      <h3>Add to Term ${c.editTerm}</h3>
+      <div class="combo">
+        <label for="plan-search">Find a lesson or a whole unit</label>
+        <input id="plan-search" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false"
+          aria-controls="plan-results" autocomplete="off" spellcheck="false" placeholder="Start typing a lesson or unit name">
+        <ul id="plan-results" class="combo-list" role="listbox" aria-label="Lessons and units" hidden></ul>
+      </div>
+      <p class="hint">Lessons come from the <a href="#/class/${c.id}/lessons">Lessons</a> tab. Picking a unit adds all of its lessons that aren't on the planner yet. Typing a new name lets you make a lesson on the spot.</p>
       <details>
-        <summary>Paste a list of lessons</summary>
+        <summary>Paste a list of new lessons</summary>
         <form data-form="paste-lessons">
           <p class="hint">One lesson per line. Copying the Lesson and Periods columns from your Term Planner spreadsheet works too: a number after a tab or a comma is the periods (1 if left out).</p>
           <textarea name="text" rows="6" placeholder="1A Ordering integers	1&#10;1B Adding and subtracting	2"></textarea>
-          <button class="btn" type="submit">Add these lessons to Term ${c.editTerm}</button>
+          <button class="btn" type="submit">Make these lessons and add them to Term ${c.editTerm}</button>
         </form>
       </details>
+    </section>
+    <p class="hint">Drag cards, or use the arrows, to change the order. Hold <kbd>Shift</kbd> while you drag or click an arrow to move a lesson together with the lessons next to it from the same unit. Set periods to 0 to skip a lesson. Later lessons move automatically.</p>
+    ${mine.length ? html`<ol class="lesson-list" data-list="lessons">${items}</ol>` : html`<p class="empty">No lessons in Term ${c.editTerm} yet. Find some with the search box above.</p>`}`;
+}
+
+// Search results for the planner's "Add to term" box: units first, then lessons not yet placed.
+function searchResults(c, q) {
+  const needle = q.trim().toLowerCase();
+  const match = (s) => !needle || s.toLowerCase().includes(needle);
+  const units = c.units.filter((u) => match(u.name)).map((u) => {
+    const all = unitLessons(c, u.id);
+    const left = all.filter((l) => !isPlaced(l)).length;
+    return {
+      kind: 'unit', id: u.id, label: u.name, disabled: !left,
+      note: !all.length ? 'No lessons yet' : left ? `Adds ${plural(left, 'lesson')}` : 'All on the planner',
+    };
+  });
+  const lessons = c.lessons.filter((l) => match(l.title))
+    .sort((a, b) => isPlaced(a) - isPlaced(b))
+    .map((l) => {
+      const unit = unitById(unitIdOf(c, l));
+      const where = !isPlaced(l) ? 'Not on the planner' : l.term === c.editTerm ? `Already in Term ${l.term}` : `In Term ${l.term}, moves here`;
+      return { kind: 'lesson', id: l.id, label: l.title, note: [unit && unit.name, where].filter(Boolean).join(' · '), disabled: l.term === c.editTerm };
+    });
+  const out = [...units.slice(0, 5), ...lessons.slice(0, 12)];
+  if (needle && !c.lessons.some((l) => l.title.toLowerCase() === needle)) {
+    out.push({ kind: 'new', id: '', label: `Make a new lesson: "${q.trim()}"`, note: `Added to Term ${c.editTerm}` });
+  }
+  return out;
+}
+
+function renderResults(input) {
+  const c = state.cls;
+  const list = document.getElementById('plan-results');
+  if (!list) return;
+  const items = searchResults(c, input.value);
+  c.search = { query: input.value, items, active: items.findIndex((it) => !it.disabled) };
+  show(list, items.length ? html`${items.map((it, i) => html`
+    <li id="opt-${i}" role="option" class="opt ${it.disabled ? 'off' : ''}" aria-selected="${i === c.search.active}"
+      ${raw(it.disabled ? 'aria-disabled="true"' : '')} data-action="pick-result" data-i="${i}">
+      <span class="opt-kind kind-${it.kind}">${{ unit: 'Unit', lesson: 'Lesson', new: 'New' }[it.kind]}</span>
+      <span class="opt-label">${it.label}</span>
+      <span class="opt-note">${it.note}</span>
+    </li>`)}` : html`<li class="opt off" role="option" aria-disabled="true">No lessons yet. Make some on the Lessons tab, or type a name.</li>`);
+  list.hidden = false;
+  input.setAttribute('aria-expanded', 'true');
+  setActive(c.search.active);
+}
+
+function setActive(i) {
+  const c = state.cls;
+  c.search.active = i;
+  document.querySelectorAll('#plan-results .opt').forEach((el, n) => el.setAttribute('aria-selected', String(n === i)));
+  const input = document.getElementById('plan-search');
+  const el = document.getElementById(`opt-${i}`);
+  if (el) { input.setAttribute('aria-activedescendant', el.id); el.scrollIntoView({ block: 'nearest' }); } else input.removeAttribute('aria-activedescendant');
+}
+
+function hideResults() {
+  const list = document.getElementById('plan-results');
+  if (list) list.hidden = true;
+  document.getElementById('plan-search')?.setAttribute('aria-expanded', 'false');
+}
+
+async function pickResult(i) {
+  const c = state.cls;
+  const it = c.search && c.search.items[i];
+  if (!it || it.disabled) return;
+  const term = c.editTerm;
+  if (it.kind === 'unit') {
+    const list = unitLessons(c, it.id).filter((l) => !isPlaced(l));
+    await placeLessons(list, term, `Added ${plural(list.length, 'lesson')} to Term ${term}`);
+  } else if (it.kind === 'lesson') {
+    const l = lessonById(it.id);
+    await placeLessons([l], term, isPlaced(l) ? `Moved to Term ${term}` : `Added to Term ${term}`);
+  } else {
+    await createLessons([{ title: c.search.query.trim().slice(0, 200), periods: 1 }], { term }, `Made and added to Term ${term}`);
+  }
+  c.search = null;
+  document.getElementById('plan-search')?.focus();
+}
+
+/* ---------- lessons tab: units and lessons on the left, the lesson on the right ---------- */
+
+function libraryPanel(c) {
+  const sel = c.lessonId ? lessonById(c.lessonId) : null;
+  const groups = [
+    ...c.units.map((u) => ({ unit: u, lessons: unitLessons(c, u.id) })),
+    { unit: null, lessons: unitLessons(c, null) },
+  ].filter((g) => (g.unit && (c.isOwner || g.lessons.length)) || (!g.unit && g.lessons.length));
+  const whenShort = (l) => {
+    const p = c.placed.get(l.id);
+    if (p && p.start) return `T${p.start.term} Wk ${p.start.week}`;
+    return isPlaced(l) ? `Term ${l.term}` : c.isOwner ? 'Not planned' : '';
+  };
+  const side = html`
+    <aside class="lib-side" aria-label="Units and lessons">
+      ${c.isOwner ? html`
+        <div class="lib-actions">
+          <button class="btn primary small" data-action="new-lesson">New lesson</button>
+          <button class="btn small" data-action="new-unit">New unit</button>
+        </div>
+        ${c.addingUnit ? html`
+          <form class="lib-unit-form" data-form="new-unit">
+            <label for="new-unit-name">New unit</label>
+            <input id="new-unit-name" name="name" maxlength="80" required placeholder="e.g. Fractions">
+            <div class="row"><button class="btn small primary" type="submit">Add unit</button>
+            <button class="btn small ghost" type="button" data-action="cancel-unit">Cancel</button></div>
+          </form>` : ''}` : ''}
+      ${c.lessons.length ? html`<input class="lib-filter" type="search" placeholder="Find a lesson" aria-label="Find a lesson" data-libfilter value="${c.libFilter || ''}">` : ''}
+      ${groups.map((g) => {
+        const id = g.unit ? g.unit.id : '';
+        const name = g.unit ? g.unit.name : 'No unit';
+        const editing = g.unit && c.editingUnit === id;
+        const open = !c.collapsed.has(id) || g.lessons.some((l) => l.id === c.lessonId);
+        return html`
+          <section class="lib-unit" data-unit="${id}" data-name="${name.toLowerCase()}" style="--unit:${unitColour(c, g.unit && id)}">
+            ${editing ? html`
+              <form class="lib-unit-form" data-form="rename-unit" data-unit="${id}">
+                <label for="rename-unit">Unit name</label>
+                <input id="rename-unit" name="name" maxlength="80" required value="${name}">
+                <div class="row"><button class="btn small primary" type="submit">Save</button>
+                <button class="btn small ghost" type="button" data-action="cancel-rename">Cancel</button></div>
+              </form>` : html`
+              <div class="lib-unit-head">
+                <h3><button class="lib-toggle" data-action="toggle-unit" data-unit="${id}" aria-expanded="${open}">${name}</button></h3>
+                <span class="lib-count" aria-label="${plural(g.lessons.length, 'lesson')}">${g.lessons.length}</span>
+                ${c.isOwner && g.unit ? html`
+                  <button class="icon-btn" data-action="new-lesson" data-unit="${id}" aria-label="New lesson in ${name}" title="New lesson in this unit">+</button>
+                  <button class="icon-btn" data-action="rename-unit" data-unit="${id}" aria-label="Rename ${name}" title="Rename">✎</button>
+                  <button class="icon-btn danger" data-action="delete-unit" data-unit="${id}" aria-label="Delete the unit ${name}" title="Delete unit">✕</button>` : ''}
+              </div>`}
+            ${g.lessons.length ? html`<ul class="lib-lessons" ${raw(open ? '' : 'hidden')}>${g.lessons.map((l) => html`
+              <li data-title="${l.title.toLowerCase()}">
+                <a href="${lessonUrl(c, l.id)}" class="${l.id === c.lessonId ? 'on' : ''} ${isPlaced(l) ? '' : 'unplaced'}" ${raw(l.id === c.lessonId ? 'aria-current="page"' : '')}>
+                  <span class="lib-title">${isAssessmentLike(l) ? '★ ' : ''}${l.title}</span>
+                  <span class="lib-when">${whenShort(l)}</span>
+                </a>
+              </li>`)}</ul>` : html`<p class="lib-empty">No lessons yet</p>`}
+          </section>`;
+      })}
+      ${!groups.length ? html`<p class="lib-empty">${c.isOwner ? 'Make a unit, then add lessons to it.' : 'No lessons yet.'}</p>` : ''}
+    </aside>`;
+  let main;
+  if (sel) main = c.isOwner && !c.preview ? lessonBuilder(c, sel) : lessonPage(c, sel);
+  else {
+    main = html`<div class="lib-blank">
+      <h2>${c.isOwner ? 'Your lessons' : 'Lessons'}</h2>
+      <p>${c.isOwner
+        ? (c.lessons.length ? 'Pick a lesson on the left to edit it, or make a new one. Lessons go onto the timetable from the Planner tab.' : 'Start with New unit, then add lessons to it with the + next to the unit. Each lesson holds its description and files.')
+        : 'Pick a lesson on the left to see what it covers and open its files.'}</p>
+    </div>`;
+  }
+  return html`<div class="library ${sel ? 'has-lesson' : ''}">${side}<section class="lib-main">${main}</section></div>`;
+}
+
+// Hides sidebar lessons that don't match the "Find a lesson" box (no redraw, so typing isn't interrupted).
+function applyLibFilter() {
+  const q = (state.cls.libFilter || '').trim().toLowerCase();
+  document.querySelectorAll('.lib-unit').forEach((sec) => {
+    const unitHit = q && sec.dataset.name.includes(q);
+    let shown = 0;
+    const ul = sec.querySelector('.lib-lessons');
+    if (ul) ul.hidden = q ? false : sec.querySelector('.lib-toggle')?.getAttribute('aria-expanded') === 'false';
+    sec.querySelectorAll('.lib-lessons li').forEach((li) => {
+      const on = !q || unitHit || li.dataset.title.includes(q);
+      li.hidden = !on;
+      if (on) shown++;
+    });
+    sec.hidden = !!q && !shown && !unitHit;
+  });
+}
+
+function lessonBuilder(c, l) {
+  const placed = c.placed.get(l.id);
+  const opt = (v, label, sel) => html`<option value="${v}" ${raw(String(v) === String(sel ?? '') ? 'selected' : '')}>${label}</option>`;
+  let plan;
+  if (placed) {
+    const when = sessions(placed);
+    plan = html`
+      <p>${statusText(placed) ? html`<span class="tag ${placed.status === 'skipped' ? '' : 'bad'}">${statusText(placed)}</span> ` : ''}
+        Term ${l.term}${when.length ? html`, Week ${when[0].week}: ${when.map((s) => s.text).join(' · ')}` : ''}</p>
+      <div class="row">
+        <a class="btn small" href="#/class/${c.id}/planner" data-action="goto-term" data-term="${l.term}">Open Term ${l.term} in the planner</a>
+        <button class="btn small" data-action="unplace">Take off the planner</button>
+      </div>`;
+  } else {
+    plan = html`
+      <p class="hint">Not on the planner yet, so it isn't on the week calendar.</p>
+      <div class="row">
+        <label class="inline">Add to <select id="place-term">${[1, 2, 3, 4].map((n) => opt(n, `Term ${n}`, c.editTerm))}</select></label>
+        <button class="btn small primary" data-action="place">Add to the end of the term</button>
+      </div>`;
+  }
+  return html`
+    <article class="builder" data-lesson="${l.id}" aria-label="Edit lesson">
+      <a class="lib-back" href="#/class/${c.id}/lessons">← All lessons</a>
+      <label class="field">Lesson name
+        <input class="builder-title" data-lfield="title" value="${l.title}" maxlength="200" required>
+      </label>
+      <label class="field">Description <span class="optional">(optional)</span>
+        <textarea data-lfield="description" rows="4" maxlength="5000" placeholder="What the lesson covers, what to bring, links to videos…">${l.description || ''}</textarea>
+      </label>
+      <div class="builder-row">
+        <label class="field">Unit
+          <select data-lfield="unitId">${opt('', 'No unit', unitIdOf(c, l) || '')}${c.units.map((u) => opt(u.id, u.name, unitIdOf(c, l)))}</select>
+        </label>
+        <label class="field periods">Periods
+          <input type="number" min="0" max="20" data-lfield="periods" value="${clampPeriods(l.periods)}">
+        </label>
+        <label class="check"><input type="checkbox" data-lfield="assessment" ${raw(l.assessment ? 'checked' : '')}> Assessment</label>
+        <label class="check"><input type="checkbox" data-lfield="homework" ${raw(l.homework ? 'checked' : '')}> Homework</label>
+      </div>
+      <section class="builder-part">
+        <h3>Files</h3>
+        ${teacherFiles(c, l)}
+      </section>
+      <section class="builder-part">
+        <h3>On the planner</h3>
+        ${plan}
+      </section>
+      <div class="builder-foot">
+        <a class="btn small ghost" href="#/class/${c.id}/lessons/${l.id}" data-action="preview">Preview as a student</a>
+        <button class="btn small danger-btn" data-action="delete-lesson">Delete lesson</button>
+      </div>
+    </article>`;
+}
+
+// The lesson as students see it: what it is, when it's on, and its files.
+function lessonPage(c, l) {
+  const placed = c.placed.get(l.id);
+  const unit = unitById(unitIdOf(c, l));
+  const order = c.result.lessons;
+  const i = order.findIndex((x) => x.id === l.id);
+  const prev = i > 0 ? order[i - 1] : null;
+  const next = i >= 0 && i < order.length - 1 ? order[i + 1] : null;
+  const when = placed ? sessions(placed) : [];
+  return html`
+    <article class="lesson-page" style="--unit:${unitColour(c, unit && unit.id)}">
+      <a class="lib-back" href="#/class/${c.id}/lessons">← All lessons</a>
+      ${c.isOwner ? html`<p class="preview-note">Student preview. <a href="#/class/${c.id}/lessons/${l.id}" data-action="end-preview">Back to editing</a></p>` : ''}
+      ${unit ? html`<p class="lp-unit">${unit.name}</p>` : ''}
+      <h2>${l.title}</h2>
+      <div class="lp-tags">
+        ${isAssessmentLike(l) ? html`<span class="tag assess-tag">★ Assessment</span>` : ''}
+        ${l.homework ? html`<span class="tag">Homework</span>` : ''}
+      </div>
+      ${when.length ? html`<p class="lp-when">Term ${when[0].term}, Week ${when[0].week}: ${when.map((s) => s.text).join(' · ')}</p>` : ''}
+      ${l.description ? html`<div class="lp-desc">${linkify(l.description)}</div>` : ''}
+      <h3>Files</h3>
+      ${filesFor(c, l.id).length ? studentFiles(c, l.id) : html`<p class="empty small">No files for this lesson yet.</p>`}
+      <nav class="lp-nav" aria-label="Other lessons">
+        ${prev ? html`<a class="btn small" href="${lessonUrl(c, prev.id)}">← ${prev.title}</a>` : html`<span></span>`}
+        ${next ? html`<a class="btn small" href="${lessonUrl(c, next.id)}">${next.title} →</a>` : ''}
+      </nav>
+    </article>`;
+}
+
+/* ---------- home: the first thing anyone sees in a class ---------- */
+
+const initials = (name) => (name || 'T').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
+const fmtPosted = (ms) => new Date(ms).toLocaleString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+const isEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s || '');
+
+// One week's lessons and cancelled periods, joining consecutive periods of the same lesson on a day.
+function weekSessions(c, term, week) {
+  const r = c.result;
+  const out = [];
+  for (const s of r.slots) {
+    if (s.term !== term || s.week !== week || (!s.blocked && s.lessonIndex === null)) continue;
+    const last = out[out.length - 1];
+    if (last && !s.blocked && last.lessonIndex === s.lessonIndex && last.day === s.day && last.to === s.period - 1) {
+      last.to = s.period;
+      continue;
+    }
+    out.push({ day: s.day, date: s.date, from: s.period, to: s.period, blocked: s.blocked, label: s.label, lessonIndex: s.blocked ? null : s.lessonIndex });
+  }
+  return out.map((x) => ({
+    ...x,
+    lesson: x.lessonIndex === null ? null : r.lessons[x.lessonIndex],
+    when: `${x.date ? fmtDay(x.date) : DAYS[x.day - 1]} · ${x.from === x.to ? `P${x.from}` : `P${x.from}–${x.to}`}`,
+  }));
+}
+
+function upNextCard(c) {
+  const today = todayISO();
+  const cur = currentWeek(c.plan, today);
+  if (!cur || !c.result.meetingsPerWeek) return '';
+  const items = weekSessions(c, cur.term, cur.week);
+  const range = weekRange(c.plan.terms[cur.term - 1], cur.week);
+  const head = { week: 'This week', weekend: 'Next week', holidays: 'First week back', ended: 'Last week' }[cur.state];
+  return html`
+    <section class="card home-card">
+      <h2>${head}</h2>
+      <p class="hint">Term ${cur.term}, Week ${cur.week} · ${rangeText(range)}</p>
+      ${items.length ? html`<ul class="up-list">${items.map((it) => html`
+        <li class="${it.date === today ? 'today' : ''} ${it.date && it.date < today ? 'past' : ''}">
+          <span class="up-when">${it.when}</span>
+          ${it.blocked
+            ? html`<span class="up-title"><span class="tag">Cancelled</span> ${it.label || 'No class'}</span>`
+            : html`<a class="up-title" href="${lessonUrl(c, it.lesson.id)}">${isAssessmentLike(it.lesson) ? '★ ' : ''}${it.lesson.title}</a>`}
+        </li>`)}</ul>` : html`<p class="empty small">No lessons this week.</p>`}
+      <a class="more" href="#/class/${c.id}/week">Week calendar →</a>
     </section>`;
 }
 
-function lessonById(id) {
-  return state.cls.lessons.find((l) => l.id === id);
+function comingUpCard(c) {
+  const today = todayISO();
+  const list = c.result.lessons.filter((l) => isAssessmentLike(l) && l.start && l.start.date && l.start.date >= today).slice(0, 3);
+  if (!list.length) return '';
+  return html`
+    <section class="card home-card">
+      <h2>Coming up</h2>
+      <ul class="up-list">${list.map((l) => html`
+        <li><span class="up-when">${fmtDay(l.start.date)}</span><a class="up-title" href="${lessonUrl(c, l.id)}">★ ${l.title}</a></li>`)}</ul>
+    </section>`;
 }
 
-async function updateLesson(id, field, value) {
-  const lesson = lessonById(id);
-  if (!lesson) return;
-  if (field === 'periods') value = Math.max(0, Math.min(20, Math.floor(Number(value)) || 0));
-  if (field === 'title') value = String(value).trim().slice(0, 200) || lesson.title;
-  if (field === 'term') {
-    // Moving to another term puts the lesson at the end of that term's list.
-    lesson.term = lessonTerm({ term: value });
-    lesson.order = Math.max(...state.cls.lessons.map((l) => l.order)) + 1;
-    sortByTerm(state.cls);
-    recompute();
-    renderPanel();
-    await saving(Promise.all([store.saveLesson(state.cls.id, lesson), store.saveOrder(state.cls.id, state.cls.lessons)]), `Moved to Term ${lesson.term}`);
-    return;
-  }
-  lesson[field] = value;
-  recompute();
-  renderPanel();
-  await saving(store.saveLesson(state.cls.id, lesson));
-}
-
-// Lessons in term order (stable, so each term keeps its own order), numbered 0, 1, 2…
-function sortByTerm(c) {
-  c.lessons.sort((a, b) => lessonTerm(a) - lessonTerm(b) || (a.order ?? 0) - (b.order ?? 0));
-  c.lessons.forEach((l, i) => { l.order = i; });
-}
-
-function termLessons(c) {
-  return c.lessons.filter((l) => lessonTerm(l) === c.editTerm);
-}
-
-async function addLessons(rows) {
-  const c = state.cls;
-  const base = c.lessons.length ? Math.max(...c.lessons.map((l) => l.order)) + 1 : 0;
-  const added = rows.map((row, i) => ({
-    id: store.newLessonId(c.id),
-    term: c.editTerm,
-    title: row.title,
-    periods: row.periods,
-    assessment: false,
-    homework: false,
-    order: base + i,
-  }));
-  c.lessons.push(...added);
-  sortByTerm(c);
-  recompute();
-  renderPanel();
-  const ok = await saving(Promise.all([...added.map((l) => store.saveLesson(c.id, l)), store.saveOrder(c.id, c.lessons)]), added.length > 1 ? `Added ${added.length} lessons` : 'Lesson added');
-  if (ok) document.querySelector('[data-form="add-lesson"] input[name="title"]')?.focus();
-}
-
-function parsePasted(text) {
-  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
-    const m = /^(.*?)[\t,]\s*(\d+)\s*$/.exec(line);
-    return m ? { title: m[1].trim().slice(0, 200), periods: Math.min(20, Number(m[2])) } : { title: line.slice(0, 200), periods: 1 };
-  }).filter((r) => r.title);
-}
-
-// toIndex is a position in the chosen term's list.
-async function reorder(fromId, toIndex) {
-  const c = state.cls;
-  const list = termLessons(c);
-  const from = list.findIndex((l) => l.id === fromId);
-  if (from < 0 || toIndex === from) return;
-  const [moved] = list.splice(from, 1);
-  list.splice(toIndex > from ? toIndex - 1 : toIndex, 0, moved);
-  c.lessons = [...c.lessons.filter((l) => lessonTerm(l) !== c.editTerm), ...list];
-  c.lessons.forEach((l, i) => { l.order = i; });
-  sortByTerm(c);
-  recompute();
-  renderPanel();
-  await saving(store.saveOrder(c.id, c.lessons), 'Order saved');
+function homePanel(c) {
+  const cls = c.cls;
+  const contact = (cls.contact || '').trim();
+  const details = [['Subject', cls.subject], ['Year', cls.year]].filter(([, v]) => v);
+  return html`
+    <div class="home-grid">
+      <div class="home-feed">
+        ${c.isOwner ? html`
+          <form class="card post-form" data-form="post">
+            <label for="post-text" class="sr-only">New announcement</label>
+            <textarea id="post-text" name="text" rows="3" maxlength="4000" required placeholder="Post an announcement to ${cls.name}"></textarea>
+            <div class="row end"><button class="btn primary" type="submit">Post</button></div>
+          </form>` : ''}
+        <h2 class="feed-head">Announcements</h2>
+        ${c.posts.length ? c.posts.map((p) => html`
+          <article class="card post">
+            <header class="post-head">
+              <span class="avatar" style="--class:${colourOf(cls)}" aria-hidden="true">${initials(cls.teacher)}</span>
+              <div class="post-who"><strong>${cls.teacher || 'Your teacher'}</strong><time datetime="${new Date(p.createdAt).toISOString()}">${fmtPosted(p.createdAt)}</time></div>
+              ${c.isOwner ? html`<button class="icon-btn danger" data-action="delete-post" data-post="${p.id}" aria-label="Delete this announcement">✕</button>` : ''}
+            </header>
+            <div class="post-text">${linkify(p.text)}</div>
+          </article>`) : html`<p class="empty">${c.isOwner ? 'No announcements yet. What you post here is the first thing students see.' : 'No announcements yet.'}</p>`}
+      </div>
+      <aside class="home-side">
+        <section class="card home-card">
+          <h2>Class information</h2>
+          <dl class="info">
+            <dt>Teacher</dt><dd>${cls.teacher || (c.isOwner ? html`<span class="hint">Add your name on the Setup tab</span>` : 'Your teacher')}</dd>
+            ${contact ? html`<dt>Contact</dt><dd>${isEmail(contact) ? html`<a href="mailto:${contact}">${contact}</a>` : linkify(contact)}</dd>` : ''}
+            ${details.map(([k, v]) => html`<dt>${k}</dt><dd>${v}</dd>`)}
+          </dl>
+          ${cls.about ? html`<p class="about">${linkify(cls.about)}</p>` : ''}
+          ${c.isOwner && (!contact || !cls.about) ? html`<p class="hint">Add ${[!contact && 'your contact details', !cls.about && 'a short description'].filter(Boolean).join(' and ')} on the <a href="#/class/${c.id}/setup">Setup</a> tab.</p>` : ''}
+        </section>
+        ${upNextCard(c)}
+        ${comingUpCard(c)}
+      </aside>
+    </div>`;
 }
 
 /* ---------- week calendar: days across, periods down, flip between weeks ---------- */
@@ -650,13 +1074,14 @@ function weekCalendar(c) {
       const a = isAssessmentLike(l);
       const part = s.of > 1 ? (span > 1 ? `Parts ${s.part}–${last.part} of ${s.of}` : `Part ${s.part} of ${s.of}`) : '';
       dayTiles++;
-      cells.push(html`<div class="tile ${a ? 'assess' : ''}" style="grid-column:${day + 1};grid-row:${p + 1} / span ${span}">
+      const nFiles = filesFor(c, l.id).length;
+      cells.push(html`<a class="tile ${a ? 'assess' : ''}" href="${lessonUrl(c, l.id)}" style="grid-column:${day + 1};grid-row:${p + 1} / span ${span}">
         <span class="tile-when">${span > 1 ? `P${p}–${p + span - 1}` : `P${p}`} <span class="tile-day">· ${DAYS[day - 1]}</span></span>
         <span class="tile-title">${a ? html`<span aria-label="Assessment">★ </span>` : ''}${l.title}</span>
         ${part ? html`<span class="tile-part">${part}</span>` : ''}
         ${l.homework ? html`<span class="tag">Homework</span>` : ''}
-        ${studentFiles(c, l.id)}
-      </div>`);
+        ${nFiles ? html`<span class="tile-files">📎 ${plural(nFiles, 'file')}</span>` : ''}
+      </a>`);
       p += span - 1;
     }
     if (!dayTiles) cells.push(html`<p class="cal-none" style="grid-column:${day + 1}">${chips.length ? '' : 'No class'}</p>`);
@@ -686,7 +1111,7 @@ function weekCalendar(c) {
         <div class="cal-corner" aria-hidden="true"></div>
         ${periodLabels}${lines}${cells}
       </div>
-      <p class="hint">Use the arrows, the ← → keys or the notches above to flip between weeks. ★ marks assessments.</p>
+      <p class="hint">Use the arrows, the ← → keys or the notches above to flip between weeks. Click a lesson to open it. ★ marks assessments.</p>
     </section>`;
 }
 
@@ -699,7 +1124,7 @@ const msToISO = (ms) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
-// Files on a lesson card: attach, mark teacher-only, set an unlock date or unlock now.
+// Files in the lesson builder: attach, mark teacher-only, set an unlock date or unlock now.
 function teacherFiles(c, l) {
   const files = filesFor(c, l.id);
   const ups = c.uploads.filter((u) => u.lessonId === l.id);
@@ -798,8 +1223,6 @@ async function updateFile(fileId, field, el) {
   await saving(store.updateFile(c.id, fileId, patch));
 }
 
-/* ---------- lessons: week by week (students, and teacher preview) ---------- */
-
 function slotsByWeek(r) {
   const byWeek = new Map();
   for (const s of r.slots) {
@@ -808,95 +1231,6 @@ function slotsByWeek(r) {
     byWeek.get(k).push(s);
   }
   return byWeek;
-}
-
-// One week's lessons and cancelled periods. Consecutive periods of the same lesson become one entry.
-function weekItems(r, slots) {
-  const entries = [];
-  for (const s of slots) {
-    const last = entries[entries.length - 1];
-    if (!s.blocked && s.lessonIndex !== null && last && last.lessonIndex === s.lessonIndex) last.slots.push(s);
-    else entries.push({ lessonIndex: s.blocked ? null : s.lessonIndex, blocked: s.blocked, slots: [s] });
-  }
-  const items = entries.filter((e) => e.blocked || e.lessonIndex !== null).map((e) => {
-    const times = e.slots.map((s) => `${s.date ? fmtDay(s.date) : DAYS[s.day - 1]} P${s.period}`).join(' · ');
-    if (e.blocked) {
-      const s = e.slots[0];
-      return html`<li class="wk-item cancelled"><span class="tag">Cancelled</span>
-        <div><strong>${s.label || 'No class'}</strong><div class="times">${times}</div></div></li>`;
-    }
-    const l = r.lessons[e.lessonIndex];
-    const continued = e.slots[0].part > 1;
-    return html`<li class="wk-item ${isAssessmentLike(l) ? 'assess' : ''}">
-      <span class="periods-pill" title="Periods">${e.slots.length}P</span>
-      <div class="wk-main">
-        <strong>${l.title}</strong>
-        ${continued ? html`<span class="tag">continued</span>` : ''}
-        ${isAssessmentLike(l) ? html`<span class="tag assess-tag">★ Assessment</span>` : ''}
-        ${l.homework ? html`<span class="tag">Homework</span>` : ''}
-        <div class="times">${times}</div>
-        ${studentFiles(state.cls, l.id)}
-      </div>
-    </li>`;
-  });
-  return items.length ? html`<ul class="wk-items">${items}</ul>` : html`<p class="empty small">No lessons this week.</p>`;
-}
-
-// The panel students see first: today's date and the week that matters now.
-function thisWeekPanel(c, cur, byWeek) {
-  const today = todayISO();
-  const term = c.plan.terms[cur.term - 1];
-  const range = weekRange(term, cur.week);
-  const heading = {
-    week: `This week: Term ${cur.term}, Week ${cur.week}`,
-    weekend: `Coming up: Term ${cur.term}, Week ${cur.week}`,
-    holidays: `Holidays. Next up: Term ${cur.term}, Week ${cur.week}`,
-    ended: `The year has finished. Last week: Term ${cur.term}, Week ${cur.week}`,
-  }[cur.state];
-  return html`
-    <section class="this-week" aria-labelledby="this-week-h">
-      <p class="today">Today is ${fmtLong(today)}</p>
-      <h2 id="this-week-h">${heading}</h2>
-      <p class="wk-range">${range ? `${fmtLong(range.from)} to ${fmtLong(range.to)}` : ''}</p>
-      ${weekItems(c.result, byWeek.get(`${cur.term}-${cur.week}`) || [])}
-    </section>`;
-}
-
-function weekList(c) {
-  const r = c.result;
-  const cur = currentWeek(c.plan, todayISO());
-  const byWeek = slotsByWeek(r);
-  const terms = c.plan.terms.map((term, ti) => {
-    const weeks = clampWeeks(term.weeks);
-    if (!weeks) return '';
-    const weekBlocks = [];
-    for (let w = 1; w <= weeks; w++) {
-      const isCur = cur && cur.term === ti + 1 && cur.week === w;
-      const isPast = cur && (ti + 1 < cur.term || (ti + 1 === cur.term && w < cur.week));
-      const range = weekRange(term, w);
-      weekBlocks.push(html`
-        <details class="week ${isCur ? 'current' : ''}" ${raw(isPast ? '' : 'open')}>
-          <summary>
-            <span class="wk-title">Week ${w}</span>
-            <span class="wk-range">${rangeText(range)}</span>
-            ${isCur ? html`<span class="tag now">${cur.state === 'week' ? 'This week' : 'Next'}</span>` : ''}
-          </summary>
-          ${weekItems(r, byWeek.get(`${ti + 1}-${w}`) || [])}
-        </details>`);
-    }
-    return html`<section class="term-block"><h3>Term ${ti + 1}</h3>${weekBlocks}</section>`;
-  });
-  if (!r.meetingsPerWeek) {
-    return html`
-      ${c.isOwner ? html`<div class="panel-head"><h2>Week by week</h2>${viewToggle()}</div>` : ''}
-      <p class="empty">Your teacher hasn't set up the timetable yet.</p>`;
-  }
-  return html`
-    ${c.isOwner ? html`<div class="panel-head"><h2>Student view</h2>${viewToggle()}</div>` : ''}
-    ${cur ? thisWeekPanel(c, cur, byWeek) : ''}
-    <h2 class="all-weeks">All weeks</h2>
-    <p class="hint">Past weeks are folded up. Click a week to open it.</p>
-    ${terms}`;
 }
 
 /* ---------- timetable ---------- */
@@ -922,7 +1256,7 @@ function timetablePanel(c) {
           if (s.lessonIndex === null) return html`<td class="free"><span class="sr-only">Free</span></td>`;
           const l = r.lessons[s.lessonIndex];
           const a = isAssessmentLike(l);
-          return html`<td class="${a ? 'assess' : ''}">${a ? html`<span class="star" aria-label="Assessment">★</span> ` : ''}${cellText(s, r.lessons)}</td>`;
+          return html`<td class="${a ? 'assess' : ''}"><a href="${lessonUrl(c, l.id)}">${a ? html`<span class="star" aria-label="Assessment">★</span> ` : ''}${cellText(s, r.lessons)}</a></td>`;
         })}
       </tr>`);
     }
@@ -955,6 +1289,12 @@ function setupPanel(c) {
             <label>Subject <input name="subject" maxlength="80" value="${c.cls.subject}"></label>
             <label>Year <input name="year" maxlength="20" value="${c.cls.year}"></label>
           </div>
+          <div class="row2">
+            <label>Teacher name <input name="teacher" maxlength="80" value="${c.cls.teacher || ''}" placeholder="Mr Cedillo"></label>
+            <label>Contact <input name="contact" maxlength="200" value="${c.cls.contact || ''}" placeholder="Your school email"></label>
+          </div>
+          <label>About this class <span class="optional">(shown on the Home tab)</span>
+            <textarea name="about" rows="3" maxlength="1000" placeholder="Room, what to bring, how to get help…">${c.cls.about || ''}</textarea></label>
           <fieldset class="swatches">
             <legend>Banner colour</legend>
             ${CLASS_COLOURS.map((col, i) => html`
@@ -969,7 +1309,7 @@ function setupPanel(c) {
 
       <section class="card">
         <h2>Terms</h2>
-        <p class="hint">The first day of each term, and how many weeks it runs (up to ${MAX_WEEKS}). You choose which term each lesson is in on the Lessons tab.</p>
+        <p class="hint">The first day of each term, and how many weeks it runs (up to ${MAX_WEEKS}). You choose which term each lesson is in on the Planner tab.</p>
         <table class="terms-table">
           <thead><tr><th scope="col">Term</th><th scope="col">Starts</th><th scope="col">Weeks</th></tr></thead>
           <tbody>
@@ -1075,9 +1415,6 @@ $app.addEventListener('click', async (ev) => {
     document.getElementById('new-class').showModal();
   } else if (action === 'close-dialog') {
     btn.closest('dialog').close();
-  } else if (action === 'view') {
-    state.view = btn.dataset.view;
-    renderPanel();
   } else if (action === 'week-prev' || action === 'week-next' || action === 'week-today' || action === 'week-goto') {
     if (action === 'week-prev') c.weekPos--;
     else if (action === 'week-next') c.weekPos++;
@@ -1090,22 +1427,85 @@ $app.addEventListener('click', async (ev) => {
     renderPanel();
     document.querySelector(`[data-action="pick-term"][data-term="${c.editTerm}"]`)?.focus();
   } else if (action === 'move') {
+    // Shift moves the lesson together with its neighbours from the same unit.
     const id = btn.closest('[data-id]').dataset.id;
-    const i = termLessons(c).findIndex((l) => l.id === id);
+    const ids = ev.shiftKey ? unitBlock(c, id) : [id];
+    const list = termLessons(c);
+    const first = list.findIndex((l) => l.id === ids[0]);
+    const last = first + ids.length - 1;
     const dir = Number(btn.dataset.dir);
-    await reorder(id, dir < 0 ? i - 1 : i + 2);
-    document.querySelector(`[data-id="${id}"] [data-dir="${dir}"]`)?.focus();
+    if ((dir < 0 && first === 0) || (dir > 0 && last === list.length - 1)) return;
+    await reorder(ids, dir < 0 ? first - 1 : last + 2);
+    document.querySelector(`[data-id="${id}"] [data-dir="${dir}"]:not(:disabled)`)?.focus();
+  } else if (action === 'unplace') {
+    const id = btn.closest('[data-id], [data-lesson]');
+    const l = lessonById(id.dataset.id || id.dataset.lesson);
+    await placeLessons([l], null, 'Taken off the planner. It\'s still on the Lessons tab.');
+  } else if (action === 'place') {
+    const l = lessonById(btn.closest('[data-lesson]').dataset.lesson);
+    const term = Number(document.getElementById('place-term').value);
+    c.editTerm = term;
+    await placeLessons([l], term, `Added to Term ${term}`);
+  } else if (action === 'goto-term') {
+    c.editTerm = Number(btn.dataset.term); // the link then opens the planner
+  } else if (action === 'pick-result') {
+    await pickResult(Number(btn.dataset.i));
+  } else if (action === 'new-lesson') {
+    const cur = c.lessonId && lessonById(c.lessonId);
+    const unitId = btn.dataset.unit || (cur ? unitIdOf(c, cur) : null);
+    const [l] = await createLessons([{ title: 'New lesson', periods: 1 }], { unitId });
+    c.focusTitle = true;
+    location.hash = lessonUrl(c, l.id);
   } else if (action === 'delete-lesson') {
-    const id = btn.closest('[data-id]').dataset.id;
+    const id = btn.closest('[data-lesson]').dataset.lesson;
     const l = lessonById(id);
-    if (!confirm(`Delete "${l.title}"? Lessons after it will move earlier.`)) return;
     const files = filesFor(c, id);
-    if (files.length && !confirm(`This also deletes its ${files.length === 1 ? 'file' : `${files.length} files`}.`)) return;
+    const extra = files.length ? ` Its ${files.length === 1 ? 'file' : `${files.length} files`} will be deleted too.` : '';
+    if (!confirm(`Delete "${l.title}"?${extra} This can't be undone.`)) return;
     c.lessons = c.lessons.filter((x) => x.id !== id);
     c.files = c.files.filter((f) => f.lessonId !== id);
     recompute();
-    renderPanel();
+    location.hash = `#/class/${c.id}/lessons`;
     await saving(Promise.all([store.deleteLesson(c.id, id), ...files.map((f) => store.deleteFile(c.id, f))]), 'Lesson deleted');
+  } else if (action === 'preview' || action === 'end-preview') {
+    ev.preventDefault();
+    c.preview = action === 'preview';
+    renderPanel();
+  } else if (action === 'toggle-unit') {
+    const id = btn.dataset.unit;
+    if (c.collapsed.has(id)) c.collapsed.delete(id); else c.collapsed.add(id);
+    btn.setAttribute('aria-expanded', String(!c.collapsed.has(id)));
+    applyLibFilter();
+  } else if (action === 'new-unit') {
+    c.addingUnit = true;
+    renderPanel();
+    document.getElementById('new-unit-name')?.focus();
+  } else if (action === 'cancel-unit') {
+    c.addingUnit = false;
+    renderPanel();
+  } else if (action === 'rename-unit') {
+    c.editingUnit = btn.dataset.unit;
+    renderPanel();
+    document.getElementById('rename-unit')?.select();
+  } else if (action === 'cancel-rename') {
+    c.editingUnit = null;
+    renderPanel();
+  } else if (action === 'delete-unit') {
+    const u = unitById(btn.dataset.unit);
+    const ids = unitLessons(c, u.id).map((l) => l.id);
+    const msg = ids.length ? ` Its ${plural(ids.length, 'lesson')} will stay, under No unit.` : '';
+    if (!confirm(`Delete the unit "${u.name}"?${msg}`)) return;
+    c.units = c.units.filter((x) => x !== u);
+    c.lessons.forEach((l) => { if (ids.includes(l.id)) l.unitId = null; });
+    recompute();
+    renderPanel();
+    await saving(store.deleteUnit(c.id, u.id, ids), 'Unit deleted');
+  } else if (action === 'delete-post') {
+    if (!confirm('Delete this announcement?')) return;
+    const id = btn.dataset.post;
+    c.posts = c.posts.filter((p) => p.id !== id);
+    renderPanel();
+    await saving(store.deleteAnnouncement(c.id, id), 'Announcement deleted');
   } else if (action === 'open-file') {
     await openFile(btn.dataset.file);
   } else if (action === 'delete-file') {
@@ -1180,19 +1580,48 @@ $app.addEventListener('submit', async (ev) => {
       subject: form.subject.value.trim(),
       year: form.year.value.trim(),
       colour: Number(form.colour.value) || 0,
+      teacher: form.teacher.value.trim().slice(0, 80),
+      contact: form.contact.value.trim().slice(0, 200),
+      about: form.about.value.trim().slice(0, 1000),
     };
     if (await saving(store.updateClass(c.id, patch))) {
       Object.assign(c.cls, patch);
       showClass(c.id, 'setup');
     }
-  } else if (kind === 'add-lesson') {
-    const title = form.title.value.trim();
-    if (!title) return;
-    await addLessons([{ title, periods: Math.max(0, Math.min(20, Math.floor(Number(form.periods.value)) || 0)) }]);
   } else if (kind === 'paste-lessons') {
     const rows = parsePasted(form.text.value);
     if (!rows.length) { toast('Paste at least one lesson, one per line.', 'error'); return; }
-    await addLessons(rows);
+    await createLessons(rows, { term: c.editTerm }, `Added ${plural(rows.length, 'lesson')} to Term ${c.editTerm}`);
+  } else if (kind === 'new-unit') {
+    const name = form.name.value.trim().slice(0, 80);
+    if (!name) return;
+    const unit = { id: store.newUnitId(c.id), name, order: c.units.length ? Math.max(...c.units.map((u) => u.order ?? 0)) + 1 : 0 };
+    c.units.push(unit);
+    c.addingUnit = false;
+    renderPanel();
+    await saving(store.saveUnit(c.id, unit), 'Unit added');
+  } else if (kind === 'rename-unit') {
+    const u = unitById(form.dataset.unit);
+    const name = form.name.value.trim().slice(0, 80);
+    if (!u || !name) return;
+    u.name = name;
+    c.editingUnit = null;
+    renderPanel();
+    await saving(store.saveUnit(c.id, u));
+  } else if (kind === 'post') {
+    const text = form.text.value.trim().slice(0, 4000);
+    if (!text) return;
+    const btn = form.querySelector('button[type=submit]');
+    btn.disabled = true;
+    try {
+      c.posts.unshift(await store.addAnnouncement(c.id, text));
+      renderPanel();
+      toast('Posted');
+    } catch (e) {
+      console.error(e);
+      toast("Couldn't post. Check your connection and try again.", 'error');
+      btn.disabled = false;
+    }
   }
 });
 
@@ -1202,12 +1631,37 @@ $app.addEventListener('change', async (ev) => {
   const c = state.cls;
   if (c && el.dataset.upload) { await uploadFiles(el); return; }
   if (c && el.dataset.ffield) { await updateFile(el.closest('[data-file]').dataset.file, el.dataset.ffield, el); return; }
+  const builder = c && el.dataset.lfield && el.closest('[data-lesson]');
+  if (builder) {
+    const id = builder.dataset.lesson;
+    const f = el.dataset.lfield;
+    const saved = updateLesson(id, f, el.type === 'checkbox' ? el.checked : el.value);
+    if (f === 'title' || f === 'description') {
+      // Typing boxes: tidy the sidebar in place, so the next box keeps its focus.
+      if (f === 'title') {
+        el.value = lessonById(id).title;
+        const side = document.querySelector('.lib-lessons a.on .lib-title');
+        if (side) side.textContent = (isAssessmentLike(lessonById(id)) ? '★ ' : '') + lessonById(id).title;
+      }
+    } else {
+      renderPanel();
+      document.querySelector(`[data-lesson] [data-lfield="${f}"]`)?.focus();
+    }
+    await saved;
+    return;
+  }
   if (!c || !el.dataset.field) return;
   const lessonEl = el.closest('[data-id]');
   if (lessonEl) {
-    const v = el.type === 'checkbox' ? el.checked : el.value;
-    await updateLesson(lessonEl.dataset.id, el.dataset.field, v);
-    document.querySelector(`[data-id="${lessonEl.dataset.id}"] [data-field="${el.dataset.field}"]`)?.focus();
+    const id = lessonEl.dataset.id;
+    if (el.dataset.field === 'term') {
+      await placeLessons([lessonById(id)], Number(el.value), `Moved to Term ${el.value}`);
+      return;
+    }
+    const saved = updateLesson(id, el.dataset.field, el.type === 'checkbox' ? el.checked : el.value);
+    renderPanel();
+    document.querySelector(`[data-id="${id}"] [data-field="${el.dataset.field}"]`)?.focus();
+    await saved;
     return;
   }
   if (el.dataset.term !== undefined) {
@@ -1228,6 +1682,32 @@ $app.addEventListener('change', async (ev) => {
   }
 });
 
+// Typing in the planner's search box or the Lessons tab's "Find a lesson" box.
+$app.addEventListener('input', (ev) => {
+  const el = ev.target;
+  if (el.id === 'plan-search') renderResults(el);
+  else if (el.dataset.libfilter !== undefined) { state.cls.libFilter = el.value; applyLibFilter(); }
+});
+$app.addEventListener('scroll', (ev) => {
+  if (ev.target.classList && ev.target.classList.contains('lib-side')) state.cls.libScroll = ev.target.scrollTop;
+}, true);
+$app.addEventListener('focusin', (ev) => { if (ev.target.id === 'plan-search') renderResults(ev.target); });
+$app.addEventListener('focusout', (ev) => { if (ev.target.id === 'plan-search') hideResults(); });
+// Clicking a search result shouldn't take focus away from the box first.
+$app.addEventListener('mousedown', (ev) => { if (ev.target.closest && ev.target.closest('.combo-list')) ev.preventDefault(); });
+$app.addEventListener('keydown', (ev) => {
+  const c = state.cls;
+  if (ev.target.id !== 'plan-search' || !c || !c.search) return;
+  const { items, active } = c.search;
+  const step = (dir) => {
+    for (let i = active + dir; i >= 0 && i < items.length; i += dir) if (!items[i].disabled) return setActive(i);
+  };
+  if (ev.key === 'ArrowDown') { ev.preventDefault(); if (document.getElementById('plan-results').hidden) renderResults(ev.target); else step(1); }
+  else if (ev.key === 'ArrowUp') { ev.preventDefault(); step(-1); }
+  else if (ev.key === 'Enter') { ev.preventDefault(); if (active >= 0) pickResult(active); }
+  else if (ev.key === 'Escape') hideResults();
+});
+
 // ← and → flip weeks on the Week tab (unless typing in a box).
 document.addEventListener('keydown', (ev) => {
   const c = state.cls;
@@ -1239,30 +1719,27 @@ document.addEventListener('keydown', (ev) => {
 
 /* ---------- drag and drop for lesson cards ---------- */
 
-// Only the grip starts a drag, so text in the card's inputs can still be selected.
-let dragId = null;
-$app.addEventListener('pointerdown', (ev) => {
-  const grip = ev.target.closest && ev.target.closest('.grip');
-  if (grip) grip.closest('.lesson').draggable = true;
-});
+// The grip itself is what's dragged (a card-wide drag wouldn't start with Shift held in Chrome),
+// with the whole card as the picture. Holding Shift drags the lesson with its neighbours from the same unit.
+let dragIds = null;
 $app.addEventListener('dragstart', (ev) => {
-  const li = ev.target.closest && ev.target.closest('.lesson');
+  const grip = ev.target.closest && ev.target.closest('.grip');
+  const li = grip && grip.closest('.lesson');
   if (!li) return;
-  dragId = li.dataset.id;
-  li.classList.add('dragging');
+  dragIds = ev.shiftKey ? unitBlock(state.cls, li.dataset.id) : [li.dataset.id];
+  dragIds.forEach((id) => document.querySelector(`.lesson[data-id="${id}"]`)?.classList.add('dragging'));
   ev.dataTransfer.effectAllowed = 'move';
-  ev.dataTransfer.setData('text/plain', dragId);
+  ev.dataTransfer.setData('text/plain', li.dataset.id);
+  ev.dataTransfer.setDragImage(li, 16, 16);
 });
-$app.addEventListener('dragend', (ev) => {
-  dragId = null;
-  const li = ev.target.closest && ev.target.closest('.lesson');
-  if (li) li.draggable = false;
+$app.addEventListener('dragend', () => {
+  dragIds = null;
   document.querySelectorAll('.lesson.dragging, .lesson.drop-before, .lesson.drop-after')
     .forEach((el) => el.classList.remove('dragging', 'drop-before', 'drop-after'));
 });
 function dropTarget(ev) {
   const li = ev.target.closest && ev.target.closest('.lesson');
-  if (!li || !dragId) return null;
+  if (!li || !dragIds || dragIds.includes(li.dataset.id)) return null;
   const box = li.getBoundingClientRect();
   return { li, after: ev.clientY > box.top + box.height / 2 };
 }
@@ -1277,9 +1754,9 @@ $app.addEventListener('drop', async (ev) => {
   const t = dropTarget(ev);
   if (!t) return;
   ev.preventDefault();
-  const id = dragId;
+  const ids = dragIds;
   const idx = termLessons(state.cls).findIndex((l) => l.id === t.li.dataset.id);
-  await reorder(id, t.after ? idx + 1 : idx);
+  await reorder(ids, t.after ? idx + 1 : idx);
 });
 
 /* ---------- start ---------- */

@@ -12,7 +12,7 @@ The site is static (GitHub Pages). Firebase holds the data, and `firestore.rules
 | File | What it does |
 | --- | --- |
 | `index.html`, `styles.css` | Page shell and look |
-| `app.js` | Screens: front page, class lists, Lessons, Timetable, Setup |
+| `app.js` | Screens: front page, class lists, and each class's tabs (Home, Lessons, Planner, Week, Timetable, Setup) |
 | `planner.js` | The scheduling engine (the spreadsheet's rules). No Firebase, no DOM |
 | `firebase.js` | Firebase sign-in and data. Loaded only when `config.js` has settings |
 | `demo.js` | Same interface as `firebase.js`, saved in the browser, with a sample class |
@@ -59,5 +59,6 @@ npm test
 1. Foundations: sign-in, classes, keys, security rules with tests. **Done**
 2. Live planner: terms, meeting pattern, events, drag-and-drop lessons, auto-schedule, capacity banner, student lesson list and timetable. **Done**
 3. Materials: uploads per lesson (PDF, PowerPoint, Word, pictures, up to 50 MB), downloads, teacher-only files that open on a date or when the teacher flips the switch. **Done**
+   - Class page overhaul: a Home tab (class details, teacher contact, announcements, this week, coming up), a Lessons library of units and lessons with a lesson builder, and a Planner that searches the library to fill each term. Shift-drag moves a run of lessons from one unit together. **Done**
 4. Tracker and reports.
-5. Templates, announcements, export, delete.
+5. Templates, export, delete.
