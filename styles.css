@@ -446,6 +446,8 @@ dialog form { display: grid; gap: 14px; }
   .lesson .check.hw { grid-area: hw; }
   .lesson .term-move { grid-area: move; }
   .lesson .lesson-files { grid-area: files; padding-left: 0; }
+  .file-row .file-chip { flex: 1 1 calc(100% - 48px); }
+  .file-row > :not(.file-chip):not([data-action="delete-file"]) { order: 1; }
   .term-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .lesson-meta { padding: 0 8px; }
   .terms-table th { white-space: nowrap; }

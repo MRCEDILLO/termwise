@@ -6,7 +6,7 @@
   "scripts": {
     "test:planner": "node --test planner.test.js",
     "test:rules": "firebase emulators:exec --config ../firebase.json --only firestore --project demo-termwise \"node --test rules.test.js\"",
-    "test:store": "firebase emulators:exec --config ../firebase.json --only firestore,auth --project demo-termwise \"node --test --test-force-exit store.test.js\"",
+    "test:store": "firebase emulators:exec --config ../firebase.json --only firestore,auth,storage --project demo-termwise \"node --test --test-force-exit store.test.js\"",
     "test": "npm run test:planner && npm run test:rules && npm run test:storage && npm run test:store",
     "test:storage": "firebase emulators:exec --config ../firebase.json --only firestore,storage --project demo-termwise \"node --test storage-rules.test.js\""
   },
