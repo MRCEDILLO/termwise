@@ -151,6 +151,24 @@ test('a teacher cannot register a key for someone else\'s class', async () => {
   await assertFails(deleteDoc(doc(db, `joinKeys/${KEY}`)));
 });
 
+test('a teacher cannot point their class at a key another class uses', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'classes/c9'), classData('other', { currentKey: NEW_KEY }));
+    await setDoc(doc(db, `joinKeys/${NEW_KEY}`), { classId: 'c9', owner: 'other' });
+  });
+  await assertFails(updateDoc(doc(teacher('other'), 'classes/c9'), { currentKey: KEY }));
+  // Creating a new class on that key fails too.
+  await assertFails(setDoc(doc(teacher('other'), 'classes/c8'), classData('other')));
+});
+
+test('class colour and join time must be plain numbers', async () => {
+  await assertFails(updateDoc(doc(teacher('gabe'), 'classes/c1'), { colour: 'x'.repeat(5000) }));
+  await assertSucceeds(updateDoc(doc(teacher('gabe'), 'classes/c1'), { colour: 3 }));
+  await assertFails(setDoc(doc(student('s2'), 'classes/c1/members/s2'), { key: KEY, joinedAt: 'x'.repeat(5000) }));
+  await assertSucceeds(setDoc(doc(student('s2'), 'classes/c1/members/s2'), { key: KEY, joinedAt: Date.now() }));
+});
+
 /* ---------- what students can and cannot do ---------- */
 
 test('students never read names or marks', async () => {

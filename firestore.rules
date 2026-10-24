@@ -44,7 +44,15 @@ service cloud.firestore {
         && d.subject is string && d.subject.size() <= 80
         && d.year is string && d.year.size() <= 20
         && d.archived is bool
-        && validKey(d.currentKey);
+        && validKey(d.currentKey)
+        && (!('colour' in d) || (d.colour is int && d.colour >= 0 && d.colour < 32))
+        && (!('createdAt' in d) || d.createdAt is timestamp || d.createdAt is int);
+    }
+
+    // The key lookup a class points at must point back at that same class, so one
+    // teacher can't set their class's key to a key another class already uses.
+    function keyIsFor(key, classId) {
+      return getAfter(/databases/$(database)/documents/joinKeys/$(key)).data.classId == classId;
     }
 
     /* ---------- teachers ---------- */
@@ -77,13 +85,13 @@ service cloud.firestore {
       allow create: if isTeacher()
         && request.resource.data.owner == request.auth.uid
         && validClass(request.resource.data)
-        && existsAfter(/databases/$(database)/documents/joinKeys/$(request.resource.data.currentKey));
+        && keyIsFor(request.resource.data.currentKey, classId);
       allow update: if isTeacher()
         && resource.data.owner == request.auth.uid
         && request.resource.data.owner == resource.data.owner
         && validClass(request.resource.data)
         && (request.resource.data.currentKey == resource.data.currentKey
-            || existsAfter(/databases/$(database)/documents/joinKeys/$(request.resource.data.currentKey)));
+            || keyIsFor(request.resource.data.currentKey, classId));
       allow delete: if isTeacher() && resource.data.owner == request.auth.uid;
 
       // A student's membership: just the key they joined with.
@@ -93,6 +101,7 @@ service cloud.firestore {
         allow create, update: if signedIn()
           && request.auth.uid == uid
           && request.resource.data.keys().hasOnly(['key', 'joinedAt'])
+          && (!('joinedAt' in request.resource.data) || request.resource.data.joinedAt is int)
           && get(classPath(classId)).data.archived == false
           && request.resource.data.key == get(classPath(classId)).data.currentKey;
         allow delete: if signedIn() && (request.auth.uid == uid || isOwner(classId));

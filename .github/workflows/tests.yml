@@ -3,6 +3,9 @@ on:
   pull_request:
   push:
     branches: [main]
+# Tests only read the code; the job's token can't push or change the repo.
+permissions:
+  contents: read
 jobs:
   test:
     runs-on: ubuntu-latest
