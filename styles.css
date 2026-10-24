@@ -222,6 +222,72 @@ legend { font-weight: 700; font-size: .92rem; color: var(--ink-2); margin-bottom
 .this-week .empty.small { padding: 0; }
 .all-weeks { margin: 8px 0 4px; }
 
+/* ---------- week calendar ---------- */
+.cal { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: clamp(12px, 2.5vw, 24px); }
+.cal-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.cal-nav { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.icon-btn.big { width: 40px; height: 40px; font-size: 1.6rem; line-height: 1; color: var(--ink); }
+.cal-title { margin-left: 8px; min-width: 0; }
+.cal-title h2 { margin: 0; font-size: clamp(1.2rem, 1rem + .8vw, 1.6rem); }
+.cal-title span { color: var(--ink-2); font-size: .95rem; }
+.cal-tools { display: flex; align-items: center; gap: 10px; }
+
+.strip { display: flex; gap: 10px; margin: 16px 0 20px; }
+.strip-term { flex: 1 1 0; min-width: 0; }
+.strip-label { display: block; font-size: .75rem; font-weight: 700; color: var(--ink-3); margin-bottom: 4px; }
+.strip-notches { display: flex; gap: 2px; }
+.notch { flex: 1 1 0; min-width: 0; height: 10px; padding: 0; border: 0; border-radius: 3px; background: var(--line); cursor: pointer; }
+.notch:hover { background: var(--ink-3); }
+.notch.now { background: color-mix(in srgb, var(--class) 45%, white); }
+.notch.sel { background: var(--class); height: 14px; margin-top: -2px; }
+
+.cal-grid {
+  position: relative; display: grid;
+  grid-template-columns: 44px repeat(5, minmax(0, 1fr));
+  grid-template-rows: auto repeat(6, minmax(76px, auto));
+  column-gap: 8px;
+}
+.cal-corner { grid-column: 1; grid-row: 1; }
+.cal-day { grid-row: 1; display: flex; flex-direction: column; align-items: center; padding: 6px 4px 10px; gap: 2px; z-index: 1; }
+.cal-dow { font-size: .85rem; color: var(--ink-2); font-weight: 700; }
+.cal-date { font: 800 1.5rem/1.1 var(--font-head); width: 44px; height: 44px; display: grid; place-items: center; border-radius: 12px; }
+.cal-month { font-size: .75rem; color: var(--ink-3); }
+.cal-day.today .cal-date { background: var(--class); color: #fff; }
+.cal-day.today .cal-dow { color: var(--class); }
+.cal-today-col { grid-row: 1 / -1; background: color-mix(in srgb, var(--class) 7%, white); border-radius: 12px; }
+.cal-chip { margin-top: 4px; font-size: .78rem; font-weight: 700; background: var(--ink-2); color: #fff; border-radius: 6px; padding: 2px 8px; text-align: center; }
+.cal-period { grid-column: 1; align-self: start; padding-top: 6px; font-size: .8rem; font-weight: 700; color: var(--ink-3); }
+.cal-line { grid-column: 1 / -1; border-top: 1px solid var(--line); }
+.cal-none { display: none; }
+
+.tile {
+  z-index: 1; margin: 4px 0; padding: 8px 10px; border-radius: 10px; min-width: 0;
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
+  background: color-mix(in srgb, var(--class) 10%, white); border-left: 4px solid var(--class);
+  overflow-wrap: anywhere;
+}
+.tile-when { font-size: .78rem; font-weight: 700; color: var(--ink-2); }
+.tile-day { display: none; }
+.tile-title { font-weight: 700; line-height: 1.3; }
+.tile-part { font-size: .82rem; color: var(--ink-2); }
+.tile .tag { margin-top: 2px; }
+.tile.assess { background: var(--assess-soft); border-left-color: var(--assess); }
+.tile.assess .tile-title { color: var(--assess); }
+.tile.cancelled { background: repeating-linear-gradient(-45deg, #F3F4F7 0 8px, #ECEEF2 8px 16px); border-left-color: var(--ink-3); color: var(--ink-2); }
+.tile.cancelled .tag { background: var(--ink-2); color: #fff; }
+
+/* Phone: days stack, each with its own tiles. */
+@media (max-width: 700px) {
+  .cal-grid { display: flex; flex-direction: column; }
+  .cal-corner, .cal-period, .cal-line, .cal-today-col { display: none; }
+  .cal-day { flex-direction: row; align-items: baseline; gap: 8px; padding: 14px 0 4px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+  .cal-day:first-of-type { border-top: 0; }
+  .cal-date { width: auto; height: auto; font-size: 1.1rem; padding: 0 6px; border-radius: 6px; }
+  .cal-none { display: block; color: var(--ink-3); font-size: .9rem; margin: 0 0 4px; }
+  .cal-none:empty { display: none; }
+  .tile-day { display: none; }
+}
+
 /* ---------- lesson editor ---------- */
 .lesson-list { list-style: none; margin: 0 0 20px; padding: 0; display: grid; gap: 8px; }
 .week-sep { display: flex; gap: 10px; align-items: baseline; padding: 12px 4px 2px; font: 700 .9rem var(--font-head); color: var(--ink-2); }
@@ -367,6 +433,7 @@ dialog form { display: grid; gap: 14px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 @media print {
+  .cal-nav button, .cal-tools, .strip, .cal .hint,
   .topbar, .tabs, .demo-strip, .seg, .add-lessons, .lesson-tools { display: none !important; }
   body { background: #fff; }
 }

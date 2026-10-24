@@ -5,7 +5,7 @@ import { FIREBASE_CONFIG, SITE_NAME } from './config.js';
 import { createDemoStore } from './demo.js';
 import { normaliseKey, formatKey } from './keys.js';
 import {
-  schedule, emptyPlan, isAssessmentLike, currentWeek, weekRange, slotLabel, cellText, lessonTerm,
+  schedule, emptyPlan, isAssessmentLike, currentWeek, weekRange, slotLabel, cellText, lessonTerm, slotDate,
   DAYS, PERIODS_PER_DAY, MAX_WEEKS, TERM_COUNT, clampWeeks,
 } from './planner.js';
 
@@ -111,7 +111,7 @@ function frame(body, { wide = false } = {}) {
 
 function parseHash() {
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
-  if (parts[0] === 'class' && parts[1]) return { page: 'class', id: parts[1], tab: parts[2] || 'lessons' };
+  if (parts[0] === 'class' && parts[1]) return { page: 'class', id: parts[1], tab: parts[2] || '' };
   return { page: 'home' };
 }
 
@@ -229,7 +229,7 @@ function showStudentHome() {
     ${joined.length ? html`
       <div class="class-grid">
         ${joined.map((j) => html`
-          <a class="class-card" href="#/class/${j.classId}/lessons">
+          <a class="class-card" href="#/class/${j.classId}/week">
             <div class="class-card-banner" style="--class:${CLASS_COLOURS[j.colour || 0] || CLASS_COLOURS[0]}">
               <span class="class-card-name">${j.name || 'Class'}</span>
               <span class="class-card-sub">${j.subject || ''}</span>
@@ -259,7 +259,7 @@ async function joinClass(form) {
     const list = getJoined().filter((j) => j.classId !== classId);
     list.push({ classId, key, name: cls.name, subject: cls.subject, colour: cls.colour || 0 });
     setJoined(list);
-    location.hash = `#/class/${classId}/lessons`;
+    location.hash = `#/class/${classId}/week`;
   } catch (e) {
     console.error(e);
     msg.textContent = "Couldn't reach the server. Check your connection and try again.";
@@ -295,9 +295,9 @@ async function showClass(id, tab) {
   }
   const c = state.cls;
   const tabs = c.isOwner
-    ? [['lessons', 'Lessons'], ['timetable', 'Timetable'], ['setup', 'Setup']]
-    : [['lessons', 'Lessons'], ['timetable', 'Timetable']];
-  if (!tabs.some(([t]) => t === tab)) tab = 'lessons';
+    ? [['week', 'Week'], ['lessons', 'Lessons'], ['timetable', 'Timetable'], ['setup', 'Setup']]
+    : [['week', 'Week'], ['lessons', 'Lessons'], ['timetable', 'Timetable']];
+  if (!tabs.some(([t]) => t === tab)) tab = c.isOwner ? 'lessons' : 'week';
   c.tab = tab;
   show($app, frame(html`
     <section class="class-banner" style="--class:${colourOf(c.cls)}">
@@ -326,6 +326,7 @@ function renderPanel() {
   if (!panel) return;
   if (c.tab === 'timetable') show(panel, timetablePanel(c));
   else if (c.tab === 'setup') show(panel, setupPanel(c));
+  else if (c.tab === 'week') show(panel, weekCalendar(c));
   else if (c.isOwner && state.view === 'edit') show(panel, lessonEditor(c));
   else show(panel, weekList(c));
 }
@@ -553,6 +554,134 @@ async function reorder(fromId, toIndex) {
   recompute();
   renderPanel();
   await saving(store.saveOrder(c.id, c.lessons), 'Order saved');
+}
+
+/* ---------- week calendar: days across, periods down, flip between weeks ---------- */
+
+// Every week of the year that has dates, in order.
+function allWeeks(plan) {
+  const out = [];
+  plan.terms.forEach((term, ti) => {
+    const n = clampWeeks(term.weeks);
+    for (let w = 1; w <= n; w++) {
+      const range = weekRange(term, w);
+      if (range) out.push({ term: ti + 1, week: w, range });
+    }
+  });
+  return out;
+}
+
+// Whole-day events (Period = All) for one day, shown as a chip under the date.
+function dayEvents(plan, term, week, day) {
+  return (plan.events || []).filter((e) => Number(e.term) === term && Number(e.week) === week &&
+    (e.day === 'All' || Number(e.day) === day) && e.period === 'All');
+}
+
+function weekCalendar(c) {
+  const r = c.result;
+  const weeks = allWeeks(c.plan);
+  if (!r.meetingsPerWeek || !weeks.length) {
+    return html`<p class="empty">${c.isOwner
+      ? 'Add term dates and tick when this class meets on the Setup tab to see the week calendar.'
+      : "Your teacher hasn't set up the timetable yet."}</p>`;
+  }
+  const cur = currentWeek(c.plan, todayISO());
+  const curPos = Math.max(0, weeks.findIndex((w) => cur && w.term === cur.term && w.week === cur.week));
+  if (c.weekPos === undefined || c.weekPos >= weeks.length) c.weekPos = curPos;
+  const wk = weeks[c.weekPos];
+  const term = c.plan.terms[wk.term - 1];
+  const today = todayISO();
+  const slots = slotsByWeek(r).get(`${wk.term}-${wk.week}`) || [];
+  const at = new Map(slots.map((s) => [`${s.day}-${s.period}`, s]));
+
+  // Week strip: one notch per week, grouped by term.
+  const strip = c.plan.terms.map((t, ti) => {
+    const mine = weeks.map((w, i) => ({ ...w, i })).filter((w) => w.term === ti + 1);
+    if (!mine.length) return '';
+    return html`<div class="strip-term">
+      <span class="strip-label">T${ti + 1}</span>
+      <div class="strip-notches">${mine.map((w) => html`<button class="notch ${w.i === c.weekPos ? 'sel' : ''} ${w.i === curPos && cur && cur.state === 'week' ? 'now' : ''}"
+        data-action="week-goto" data-pos="${w.i}" aria-label="Term ${w.term} Week ${w.week}, ${rangeText(w.range)}"
+        ${raw(w.i === c.weekPos ? 'aria-current="true"' : '')} title="Term ${w.term} Week ${w.week}"></button>`)}</div>
+    </div>`;
+  });
+
+  // Day columns. Consecutive periods of the same lesson merge into one tall tile.
+  const cells = [];
+  for (let day = 1; day <= 5; day++) {
+    const date = slotDate(term, wk.week, day);
+    const isToday = date === today;
+    const chips = dayEvents(c.plan, wk.term, wk.week, day);
+    cells.push(html`<div class="cal-day ${isToday ? 'today' : ''}" style="grid-column:${day + 1}">
+      <span class="cal-dow">${DAYS[day - 1]}</span>
+      <span class="cal-date">${fmt(date, { day: 'numeric' })}</span>
+      <span class="cal-month">${fmt(date, { month: 'short' })}</span>
+      ${chips.map((e) => html`<span class="cal-chip">${e.label || 'No classes'}</span>`)}
+    </div>`);
+    if (isToday) cells.push(html`<div class="cal-today-col" style="grid-column:${day + 1}" aria-hidden="true"></div>`);
+    let dayTiles = 0;
+    for (let p = 1; p <= PERIODS_PER_DAY; p++) {
+      const s = at.get(`${day}-${p}`);
+      if (!s) continue;
+      if (s.blocked) {
+        dayTiles++;
+        cells.push(html`<div class="tile cancelled" style="grid-column:${day + 1};grid-row:${p + 1}">
+          <span class="tile-when">P${p} <span class="tile-day">· ${DAYS[day - 1]}</span></span>
+          <span class="tag">Cancelled</span>
+          <span class="tile-title">${s.label || 'No class'}</span>
+        </div>`);
+        continue;
+      }
+      if (s.lessonIndex === null) continue;
+      // Merge with the next periods if they are the same lesson.
+      let span = 1;
+      while (p + span <= PERIODS_PER_DAY) {
+        const n = at.get(`${day}-${p + span}`);
+        if (!n || n.blocked || n.lessonIndex !== s.lessonIndex) break;
+        span++;
+      }
+      const last = at.get(`${day}-${p + span - 1}`);
+      const l = r.lessons[s.lessonIndex];
+      const a = isAssessmentLike(l);
+      const part = s.of > 1 ? (span > 1 ? `Parts ${s.part}–${last.part} of ${s.of}` : `Part ${s.part} of ${s.of}`) : '';
+      dayTiles++;
+      cells.push(html`<div class="tile ${a ? 'assess' : ''}" style="grid-column:${day + 1};grid-row:${p + 1} / span ${span}">
+        <span class="tile-when">${span > 1 ? `P${p}–${p + span - 1}` : `P${p}`} <span class="tile-day">· ${DAYS[day - 1]}</span></span>
+        <span class="tile-title">${a ? html`<span aria-label="Assessment">★ </span>` : ''}${l.title}</span>
+        ${part ? html`<span class="tile-part">${part}</span>` : ''}
+        ${l.homework ? html`<span class="tag">Homework</span>` : ''}
+      </div>`);
+      p += span - 1;
+    }
+    if (!dayTiles) cells.push(html`<p class="cal-none" style="grid-column:${day + 1}">${chips.length ? '' : 'No class'}</p>`);
+  }
+  const periodLabels = Array.from({ length: PERIODS_PER_DAY }, (_, i) => html`<div class="cal-period" style="grid-row:${i + 2}">P${i + 1}</div>`);
+  const lines = Array.from({ length: PERIODS_PER_DAY }, (_, i) => html`<div class="cal-line" style="grid-row:${i + 2}" aria-hidden="true"></div>`);
+
+  const label = { week: 'This week', weekend: 'Next week', holidays: 'Next up', ended: 'Last week' };
+  return html`
+    <section class="cal" style="--class:${colourOf(c.cls)}" aria-label="Week calendar">
+      <div class="cal-head">
+        <div class="cal-nav">
+          <button class="icon-btn big" data-action="week-prev" aria-label="Previous week" ${raw(c.weekPos === 0 ? 'disabled' : '')}>‹</button>
+          <button class="icon-btn big" data-action="week-next" aria-label="Next week" ${raw(c.weekPos === weeks.length - 1 ? 'disabled' : '')}>›</button>
+          <div class="cal-title">
+            <h2>Term ${wk.term} · Week ${wk.week}</h2>
+            <span>${fmt(wk.range.from, { day: 'numeric', month: 'short' })} – ${fmt(wk.range.to, { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+          </div>
+        </div>
+        <div class="cal-tools">
+          ${c.weekPos === curPos && cur ? html`<span class="tag now">${label[cur.state]}</span>` : ''}
+          <button class="btn" data-action="week-today" ${raw(c.weekPos === curPos ? 'disabled' : '')}>Today</button>
+        </div>
+      </div>
+      <div class="strip" role="group" aria-label="Weeks of the year">${strip}</div>
+      <div class="cal-grid" data-cal>
+        <div class="cal-corner" aria-hidden="true"></div>
+        ${periodLabels}${lines}${cells}
+      </div>
+      <p class="hint">Use the arrows, the ← → keys or the notches above to flip between weeks. ★ marks assessments.</p>
+    </section>`;
 }
 
 /* ---------- lessons: week by week (students, and teacher preview) ---------- */
@@ -834,6 +963,13 @@ $app.addEventListener('click', async (ev) => {
   } else if (action === 'view') {
     state.view = btn.dataset.view;
     renderPanel();
+  } else if (action === 'week-prev' || action === 'week-next' || action === 'week-today' || action === 'week-goto') {
+    if (action === 'week-prev') c.weekPos--;
+    else if (action === 'week-next') c.weekPos++;
+    else if (action === 'week-today') c.weekPos = undefined;
+    else c.weekPos = Number(btn.dataset.pos);
+    renderPanel();
+    document.querySelector(action === 'week-goto' ? `[data-pos="${c.weekPos}"]` : `[data-action="${action}"]:not(:disabled)`)?.focus();
   } else if (action === 'pick-term') {
     c.editTerm = Number(btn.dataset.term);
     renderPanel();
@@ -962,6 +1098,15 @@ $app.addEventListener('change', async (ev) => {
       : Number(el.value);
     await savePlan();
   }
+});
+
+// ← and → flip weeks on the Week tab (unless typing in a box).
+document.addEventListener('keydown', (ev) => {
+  const c = state.cls;
+  if (!c || c.tab !== 'week' || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+  if (ev.target.closest && ev.target.closest('input, select, textarea')) return;
+  const btn = document.querySelector(ev.key === 'ArrowLeft' ? '[data-action="week-prev"]' : ev.key === 'ArrowRight' ? '[data-action="week-next"]' : null);
+  if (btn && !btn.disabled) { ev.preventDefault(); btn.click(); }
 });
 
 /* ---------- drag and drop for lesson cards ---------- */

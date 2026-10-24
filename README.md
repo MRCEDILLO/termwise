@@ -3,7 +3,7 @@
 A Google Classroom-style site where the term plan and the lesson materials are the same thing. Change the plan, and every student sees the right lesson on the right day.
 
 - **Teachers** sign in with Google, create classes, set up terms and the meeting pattern, pick a term and drag its lesson cards into order. Each term's lessons fill that term's free periods automatically, as in the Term Planner spreadsheet.
-- **Students** type the class key. No account and no name: they see this week's lessons first (worked out from today's date), then every week of the year and the timetable.
+- **Students** type the class key. No account and no name: they land on a week calendar (days across, periods down, with lesson tiles) and can flip to earlier or later weeks. There's also a week-by-week list and the full timetable.
 
 The site is static (GitHub Pages). Firebase holds the data, and `firestore.rules` decides who can read and write what.
 
