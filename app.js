@@ -1,7 +1,7 @@
 // Termwise screens. Data goes through `store` (Firebase or the demo store); the
 // timetable is always worked out fresh in the browser by planner.js.
 
-import { FIREBASE_CONFIG, SITE_NAME } from './config.js';
+import { FIREBASE_CONFIG, SITE_NAME, ADMIN_EMAIL } from './config.js';
 import { createDemoStore } from './demo.js';
 import { normaliseKey, formatKey } from './keys.js';
 import { ACCEPT, fileProblem, isOpen, fileSize, fileIcon } from './files.js';
@@ -101,6 +101,7 @@ function frame(body, { wide = false } = {}) {
       <a class="brand" href="#/"><span class="brand-mark" aria-hidden="true"></span>${SITE_NAME}</a>
       <div class="topbar-right">
         ${u && u.isTeacher ? html`<span class="who">${u.name || u.email}</span>` : ''}
+        ${u && u.isAdmin ? html`<a class="btn ghost" href="#/teachers">Teachers</a>` : ''}
         ${u ? html`<button class="btn ghost" data-action="sign-out">${u.isTeacher ? 'Sign out' : 'Leave'}</button>` : ''}
       </div>
     </header>
@@ -111,6 +112,7 @@ function frame(body, { wide = false } = {}) {
 
 function parseHash() {
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+  if (parts[0] === 'teachers') return { page: 'teachers' };
   if (parts[0] === 'class' && parts[1]) return { page: 'class', id: parts[1], tab: parts[2] || '', sub: parts[3] || '' };
   return { page: 'home' };
 }
@@ -121,6 +123,12 @@ async function route() {
     return;
   }
   const r = parseHash();
+  if (state.user && state.user.isTeacher && !state.user.allowed) return showNotAllowed();
+  if (r.page === 'teachers') {
+    if (state.user && state.user.isAdmin) return showTeachers();
+    location.hash = '#/';
+    return;
+  }
   if (r.page === 'class') return showClass(r.id, r.tab, r.sub);
   state.cls = null;
   if (!state.user) return showLanding();
@@ -164,6 +172,47 @@ function showLanding() {
         ${sample ? html`<p class="hint">Sample class key: <strong class="mono">${formatKey(sample)}</strong></p>` : ''}
       </section>
     </div>`));
+}
+
+/* ---------- who may be a teacher ---------- */
+
+// A Google account the admin hasn't added. The rules refuse it everything a teacher can do.
+function showNotAllowed() {
+  state.cls = null;
+  show($app, frame(html`
+    <section class="card narrow">
+      <h1>You're not on the teacher list yet</h1>
+      <p>Only teachers the admin has added can use ${SITE_NAME}. You're signed in as <strong>${state.user.email}</strong>.</p>
+      <p>Ask the admin to add this email, then sign in again. If you're a student, sign out and join with your class key instead.</p>
+      <button class="btn primary" data-action="sign-out">Sign out</button>
+    </section>`));
+}
+
+// Admin only: the Google emails allowed to sign in as teachers.
+async function showTeachers() {
+  state.cls = null;
+  show($app, frame(html`<div class="loading">Loading the teacher list…</div>`));
+  let list = [];
+  try { list = await store.listAllowedTeachers(); } catch (e) { console.error(e); toast("Couldn't load the teacher list.", 'error'); }
+  list.sort((a, b) => a.email.localeCompare(b.email));
+  show($app, frame(html`
+    <div class="page-head teachers-head">
+      <h1>Teachers</h1>
+      <a class="btn ghost" href="#/">Back to your classes</a>
+    </div>
+    <section class="card narrow">
+      <p class="hint">Only these Google accounts can sign in as teachers. You (${state.user.email || ADMIN_EMAIL}) always can, as the admin, and only you see this page. Taking someone off the list locks them out of their classes straight away but doesn't delete anything.</p>
+      <form class="allow-form" data-form="allow-teacher">
+        <label>Add a teacher's Google email
+          <input name="email" type="email" required maxlength="200" autocomplete="off" spellcheck="false" placeholder="name@school.vic.edu.au">
+        </label>
+        <button class="btn primary" type="submit">Add teacher</button>
+      </form>
+      ${list.length ? html`<ul class="allow-list">${list.map((t) => html`
+        <li><span>${t.email}</span>
+          <button class="icon-btn danger" data-action="remove-teacher" data-email="${t.email}" aria-label="Remove ${t.email}">✕</button></li>`)}</ul>`
+        : html`<p class="empty small">No other teachers yet.</p>`}
+    </section>`));
 }
 
 /* ---------- teacher home ---------- */
@@ -1411,6 +1460,10 @@ $app.addEventListener('click', async (ev) => {
     state.cls = null;
     location.hash = '#/';
     await store.signOut();
+  } else if (action === 'remove-teacher') {
+    const email = btn.dataset.email;
+    if (!confirm(`Take ${email} off the teacher list? They won't be able to open their classes until you add them back.`)) return;
+    if (await saving(store.removeTeacher(email), 'Removed')) showTeachers();
   } else if (action === 'new-class') {
     document.getElementById('new-class').showModal();
   } else if (action === 'close-dialog') {
@@ -1561,6 +1614,10 @@ $app.addEventListener('submit', async (ev) => {
 
   if (kind === 'join') {
     await joinClass(form);
+  } else if (kind === 'allow-teacher') {
+    const email = form.email.value.trim().toLowerCase();
+    if (!/^[^@\s/]+@[^@\s/]+\.[^@\s/]+$/.test(email)) { toast("That doesn't look like an email address.", 'error'); return; }
+    if (await saving(store.allowTeacher(email), `Added ${email}`)) showTeachers();
   } else if (kind === 'new-class') {
     const data = {
       name: form.name.value.trim(),
@@ -1762,7 +1819,12 @@ $app.addEventListener('drop', async (ev) => {
 /* ---------- start ---------- */
 
 window.addEventListener('hashchange', route);
-store.onAuth((user) => {
+store.onAuth(async (user) => {
+  // Teachers: the admin, or a Google account on the admin's list (the rules check this too).
+  if (user && user.isTeacher) {
+    user.isAdmin = store.mode === 'demo' || (user.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase();
+    user.allowed = user.isAdmin || await store.isAllowedTeacher(user.email || '').catch(() => false);
+  }
   const changed = !state.user || !user || state.user.uid !== user.uid;
   state.user = user;
   if (changed) state.cls = null;

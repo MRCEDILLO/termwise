@@ -102,13 +102,14 @@ export function createDemoStore() {
       lessons: { sample: s.lessons },
       announcements: { sample: s.announcements },
       members: {},
+      allowedTeachers: [],
     };
     save(DATA_KEY, data);
   }
   const persist = () => save(DATA_KEY, data);
   let listeners = [];
   const userFor = (role) => role === 'teacher'
-    ? { uid: 'demo-teacher', name: 'Demo teacher', email: '', isTeacher: true }
+    ? { uid: 'demo-teacher', name: 'Demo teacher', email: 'demo@example.com', isTeacher: true }
     : role === 'student' ? { uid: 'demo-student', name: '', email: '', isTeacher: false } : null;
   let user = userFor(load(USER_KEY, null));
   const setUser = (role) => {
@@ -137,6 +138,19 @@ export function createDemoStore() {
     },
     async signInTeacher() { setUser('teacher'); },
     async signOut() { setUser(null); },
+
+    // In demo mode the demo teacher is the admin, so every teacher is allowed.
+    async isAllowedTeacher() { return true; },
+    async listAllowedTeachers() { return structuredClone(data.allowedTeachers ||= []); },
+    async allowTeacher(email) {
+      const list = (data.allowedTeachers ||= []);
+      if (!list.some((t) => t.email === email.toLowerCase())) list.push({ email: email.toLowerCase(), addedAt: Date.now() });
+      persist();
+    },
+    async removeTeacher(email) {
+      data.allowedTeachers = (data.allowedTeachers || []).filter((t) => t.email !== email.toLowerCase());
+      persist();
+    },
 
     async listMyClasses() {
       await tick();

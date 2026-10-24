@@ -3,7 +3,7 @@ rules_version = '2';
 // Termwise Storage rules: lesson files.
 // Files live at classes/{classId}/files/{fileId}/{name}. Their record in Firestore
 // (classes/{classId}/files/{fileId}) says whether the file is teacher-only and when it unlocks.
-// Only the class's teacher can upload or delete. Students who joined with the current key can
+// Only the class's teacher (while still on the admin's list) can upload or delete. Students who joined with the current key can
 // read a file once it is open: not teacher-only, switched on, or past its unlock date.
 service firebase.storage {
   match /b/{bucket}/o {
@@ -12,10 +12,17 @@ service firebase.storage {
       return firestore.get(/databases/(default)/documents/classes/$(classId)).data;
     }
 
-    function isOwner(classId) {
+    // A Google account on the admin's teacher list, or the admin (as in firestore.rules).
+    function isTeacher() {
       return request.auth != null
         && request.auth.token.firebase.sign_in_provider == 'google.com'
-        && classData(classId).owner == request.auth.uid;
+        && request.auth.token.email_verified == true
+        && (request.auth.token.email.lower() == 'gabrielcedillo2002@gmail.com'
+            || firestore.exists(/databases/(default)/documents/allowedTeachers/$(request.auth.token.email.lower())));
+    }
+
+    function isOwner(classId) {
+      return isTeacher() && classData(classId).owner == request.auth.uid;
     }
 
     function isMember(classId) {

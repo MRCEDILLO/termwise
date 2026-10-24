@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import {
   initializeTestEnvironment, assertSucceeds, assertFails,
 } from '@firebase/rules-unit-testing';
-import { doc, setDoc, updateDoc, Timestamp } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, deleteDoc, Timestamp } from 'firebase/firestore';
 import { ref, uploadBytes, getMetadata, deleteObject } from 'firebase/storage';
 
 let env;
@@ -32,6 +32,8 @@ beforeEach(async () => {
     const db = ctx.firestore();
     await setDoc(doc(db, 'classes/c1'), { name: '8A', subject: '', year: '', owner: 'gabe', currentKey: KEY, archived: false });
     await setDoc(doc(db, 'classes/c1/members/s1'), { key: KEY });
+    await setDoc(doc(db, 'allowedTeachers/gabe@example.com'), { addedAt: 1 });
+    await setDoc(doc(db, 'allowedTeachers/other@example.com'), { addedAt: 1 });
     await setDoc(doc(db, 'classes/c1/files/open'), file());
     await setDoc(doc(db, 'classes/c1/files/answers'), file({ name: 'answers.pdf', locked: true }));
     await setDoc(doc(db, 'classes/c1/files/past'), file({ locked: true, unlockAt: Timestamp.fromMillis(Date.now() - hour) }));
@@ -44,7 +46,7 @@ beforeEach(async () => {
   });
 });
 
-const teacher = (uid) => env.authenticatedContext(uid, { firebase: { sign_in_provider: 'google.com' } });
+const teacher = (uid) => env.authenticatedContext(uid, { email: `${uid}@example.com`, email_verified: true, firebase: { sign_in_provider: 'google.com' } });
 const student = (uid) => env.authenticatedContext(uid, { firebase: { sign_in_provider: 'anonymous' } });
 const canRead = (ctx, id) => getMetadata(ref(ctx.storage(), path(id)));
 
@@ -134,4 +136,10 @@ test('file records must have the expected shape', async () => {
   await assertFails(setDoc(doc(db, 'classes/c1/files/n2'), { ...file(), extra: 1 }));
   await assertFails(setDoc(doc(db, 'classes/c1/files/n3'), file({ size: 60 * 1024 * 1024 })));
   await assertFails(setDoc(doc(db, 'classes/c1/files/n4'), file({ unlockAt: 'tomorrow' })));
+});
+
+test('a teacher taken off the list can no longer upload or open locked files', async () => {
+  await env.withSecurityRulesDisabled((ctx) => deleteDoc(doc(ctx.firestore(), 'allowedTeachers/gabe@example.com')));
+  await assertFails(uploadBytes(ref(teacher('gabe').storage(), path('x')), bytes, { contentType: PDF }));
+  await assertFails(canRead(teacher('gabe'), 'answers'));
 });

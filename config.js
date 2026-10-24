@@ -22,3 +22,7 @@ export const FIREBASE_CONFIG = {
 };
 
 export const SITE_NAME = 'Termwise';
+
+// The admin: always a teacher, and the only one who sees the Teachers page where other
+// teachers' emails are added. Also written into firestore.rules and storage.rules.
+export const ADMIN_EMAIL = 'gabrielcedillo2002@gmail.com';

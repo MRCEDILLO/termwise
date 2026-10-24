@@ -31,13 +31,19 @@ beforeEach(async () => {
     await setDoc(doc(db, 'classes/c1/lessons/l1'), { title: '1A', periods: 2, order: 0 });
     await setDoc(doc(db, 'classes/c1/students/st1'), { name: 'Sam P' });
     await setDoc(doc(db, 'classes/c1/marks/m1'), { score: 7 });
+    // The admin has let these two teachers in.
+    await setDoc(doc(db, 'allowedTeachers/gabe@example.com'), { addedAt: 1 });
+    await setDoc(doc(db, 'allowedTeachers/other@example.com'), { addedAt: 1 });
   });
 });
 
 function classData(owner, extra = {}) {
   return { name: '8A Maths', subject: 'Maths', year: '2027', owner, currentKey: KEY, archived: false, ...extra };
 }
-const teacher = (uid) => env.authenticatedContext(uid, { firebase: { sign_in_provider: 'google.com' } }).firestore();
+const ADMIN_EMAIL = 'gabrielcedillo2002@gmail.com';
+const google = (uid, email) => env.authenticatedContext(uid, { email, email_verified: true, firebase: { sign_in_provider: 'google.com' } }).firestore();
+const teacher = (uid) => google(uid, `${uid}@example.com`);
+const admin = () => google('admin-uid', ADMIN_EMAIL);
 const student = (uid) => env.authenticatedContext(uid, { firebase: { sign_in_provider: 'anonymous' } }).firestore();
 const nobody = () => env.unauthenticatedContext().firestore();
 
@@ -236,4 +242,54 @@ test('announcements are text only', async () => {
   await assertFails(setDoc(doc(t, 'classes/c1/announcements/a4'), { text: 'Hi', pinned: true }));
   await assertFails(setDoc(doc(t, 'classes/c1/announcements/a5'), { text: 'x'.repeat(4001) }));
   await assertSucceeds(deleteDoc(doc(t, 'classes/c1/announcements/a3')));
+});
+
+/* ---------- who may be a teacher ---------- */
+
+test('a Google account the admin has not added is not a teacher', async () => {
+  const db = google('newbie', 'newbie@example.com');
+  const b = writeBatch(db);
+  b.set(doc(db, 'classes/c2'), classData('newbie', { currentKey: NEW_KEY }));
+  b.set(doc(db, `joinKeys/${NEW_KEY}`), { classId: 'c2', owner: 'newbie' });
+  await assertFails(b.commit());
+  await assertFails(setDoc(doc(db, 'teachers/newbie'), { name: 'New' }));
+  await assertFails(getDocs(query(collection(db, 'classes'), where('owner', '==', 'newbie'))));
+});
+
+test('taking a teacher off the list locks them out of their own class', async () => {
+  await assertSucceeds(getDoc(doc(teacher('gabe'), 'classes/c1')));
+  await assertSucceeds(deleteDoc(doc(admin(), 'allowedTeachers/gabe@example.com')));
+  await assertFails(getDoc(doc(teacher('gabe'), 'classes/c1')));
+  await assertFails(setDoc(doc(teacher('gabe'), 'classes/c1/plan/main'), { pattern: [] }));
+});
+
+test('an unverified email does not count, even if it is on the list', async () => {
+  const db = env.authenticatedContext('gabe', { email: 'gabe@example.com', email_verified: false, firebase: { sign_in_provider: 'google.com' } }).firestore();
+  await assertFails(getDoc(doc(db, 'classes/c1')));
+});
+
+test('the admin is always a teacher and manages the list', async () => {
+  const db = admin();
+  const b = writeBatch(db);
+  b.set(doc(db, 'classes/c2'), classData('admin-uid', { currentKey: NEW_KEY }));
+  b.set(doc(db, `joinKeys/${NEW_KEY}`), { classId: 'c2', owner: 'admin-uid' });
+  await assertSucceeds(b.commit());
+  await assertSucceeds(getDocs(collection(db, 'allowedTeachers')));
+  await assertSucceeds(setDoc(doc(db, 'allowedTeachers/new.teacher@school.vic.edu.au'), { addedAt: Date.now() }));
+  await assertFails(setDoc(doc(db, 'allowedTeachers/Mixed@Case.com'), { addedAt: Date.now() }));
+  await assertFails(setDoc(doc(db, 'allowedTeachers/not-an-email'), { addedAt: Date.now() }));
+  await assertFails(setDoc(doc(db, 'allowedTeachers/x@y.com'), { addedAt: Date.now(), role: 'admin' }));
+});
+
+test('nobody else can see or change the list, but a teacher can check their own entry', async () => {
+  await assertSucceeds(getDoc(doc(teacher('gabe'), 'allowedTeachers/gabe@example.com')));
+  await assertSucceeds(getDoc(doc(google('newbie', 'newbie@example.com'), 'allowedTeachers/newbie@example.com')));
+  await assertFails(getDoc(doc(teacher('gabe'), 'allowedTeachers/other@example.com')));
+  await assertFails(getDocs(collection(teacher('gabe'), 'allowedTeachers')));
+  await assertFails(setDoc(doc(google('newbie', 'newbie@example.com'), 'allowedTeachers/newbie@example.com'), { addedAt: 1 }));
+  await assertFails(setDoc(doc(teacher('gabe'), 'allowedTeachers/friend@example.com'), { addedAt: 1 }));
+  await assertFails(deleteDoc(doc(teacher('gabe'), 'allowedTeachers/other@example.com')));
+  await assertFails(getDoc(doc(student('s1'), 'allowedTeachers/gabe@example.com')));
+  // A look-alike of the admin's address is just another account.
+  await assertFails(getDocs(collection(google('fake', 'gabrielcedillo2002@gmail.com.evil.com'), 'allowedTeachers')));
 });

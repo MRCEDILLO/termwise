@@ -44,6 +44,10 @@ Sign-in, classes, keys and the planner work on Firebase's free **Spark** plan. L
 
 Whenever `firestore.rules` or `storage.rules` changes, paste it into its Rules tab again and publish.
 
+### Who can be a teacher
+
+Anyone can sign in with Google, but only the **admin** and the emails the admin adds can act as teachers. The admin is `ADMIN_EMAIL` in `config.js`, and the same address is written into `firestore.rules` and `storage.rules` (change all three together). Signed in as the admin, open **Teachers** in the top bar to add or remove teacher emails. Anyone else who signs in with Google sees a "not on the teacher list" page. Students are unaffected: they join with a class key.
+
 ## Tests
 
 ```
