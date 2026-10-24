@@ -7,7 +7,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
   getFirestore, doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc,
-  writeBatch, query, where, orderBy, limit, serverTimestamp, Timestamp,
+  writeBatch, query, where, orderBy, limit, serverTimestamp, Timestamp, deleteField,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import {
   getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject,
@@ -275,6 +275,53 @@ export function createFirebaseStore(config) {
     // A link to open or download the file. Refused by the rules while a file is still locked.
     fileUrl(classId, f) {
       return getDownloadURL(fileRef(classId, f));
+    },
+
+    /* ---------- tracker: owner only (the rules refuse everyone else) ---------- */
+
+    async getStudents(id) {
+      const snap = await getDocs(collection(db, 'classes', id, 'students'));
+      return snap.docs.map((d) => ({ id: d.id, name: d.data().name || '' }));
+    },
+
+    newStudentId(id) {
+      return doc(collection(db, 'classes', id, 'students')).id;
+    },
+
+    async saveStudents(id, list) {
+      const b = writeBatch(db);
+      list.forEach((s) => b.set(doc(db, 'classes', id, 'students', s.id), { name: s.name }));
+      await b.commit();
+    },
+
+    // The student's marks go with them.
+    async deleteStudent(id, studentId) {
+      const b = writeBatch(db);
+      b.delete(doc(db, 'classes', id, 'students', studentId));
+      b.delete(doc(db, 'classes', id, 'marks', studentId));
+      await b.commit();
+    },
+
+    // { studentId: { a: { columnId: score or 'IE' }, h: { columnId: true/false } } }
+    async getMarks(id) {
+      const snap = await getDocs(collection(db, 'classes', id, 'marks'));
+      return Object.fromEntries(snap.docs.map((d) => [d.id, d.data()]));
+    },
+
+    // kind is 'a' (assessment) or 'h' (homework); null clears the cell.
+    setMark(id, studentId, kind, colId, value) {
+      return setDoc(doc(db, 'classes', id, 'marks', studentId),
+        { [kind]: { [colId]: value === null ? deleteField() : value } }, { merge: true });
+    },
+
+    // Grading scale, max marks and tracker-only columns. Null until first saved.
+    async getTracker(id) {
+      const snap = await getDoc(doc(db, 'classes', id, 'tracker', 'settings'));
+      return snap.exists() ? snap.data() : null;
+    },
+
+    saveTracker(id, tracker) {
+      return setDoc(doc(db, 'classes', id, 'tracker', 'settings'), tracker);
     },
 
     /* ---------- students ---------- */

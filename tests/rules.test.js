@@ -31,6 +31,7 @@ beforeEach(async () => {
     await setDoc(doc(db, 'classes/c1/lessons/l1'), { title: '1A', periods: 2, order: 0 });
     await setDoc(doc(db, 'classes/c1/students/st1'), { name: 'Sam P' });
     await setDoc(doc(db, 'classes/c1/marks/m1'), { score: 7 });
+    await setDoc(doc(db, 'classes/c1/tracker/settings'), { max: { 'a-l1': 20 } });
     // The admin has let these two teachers in.
     await setDoc(doc(db, 'allowedTeachers/gabe@example.com'), { addedAt: 1 });
     await setDoc(doc(db, 'allowedTeachers/other@example.com'), { addedAt: 1 });
@@ -182,7 +183,19 @@ test('students never read names or marks', async () => {
   await assertFails(getDocs(collection(db, 'classes/c1/students')));
   await assertFails(getDoc(doc(db, 'classes/c1/students/st1')));
   await assertFails(getDocs(collection(db, 'classes/c1/marks')));
+  await assertFails(getDoc(doc(db, 'classes/c1/marks/s1')));
+  await assertFails(getDoc(doc(db, 'classes/c1/tracker/settings')));
+  await assertFails(setDoc(doc(db, 'classes/c1/marks/s1'), { a: { 'a-l1': 20 } }));
   await assertFails(getDocs(collection(db, 'classes/c1/members')));
+});
+
+test('other teachers and removed teachers cannot see the tracker', async () => {
+  await assertFails(getDocs(collection(teacher('other'), 'classes/c1/marks')));
+  await assertFails(getDoc(doc(teacher('other'), 'classes/c1/tracker/settings')));
+  // Gabe's account, but his email has been taken off the admin's list.
+  const removed = google('gabe', 'gone@example.com');
+  await assertFails(getDocs(collection(removed, 'classes/c1/students')));
+  await assertFails(getDoc(doc(removed, 'classes/c1/tracker/settings')));
 });
 
 test('students cannot change the plan or lessons', async () => {
@@ -204,6 +217,8 @@ test('the owner manages the plan, lessons, students and marks', async () => {
   await assertSucceeds(setDoc(doc(db, 'classes/c1/lessons/l2'), { title: '1B', periods: 1, order: 1 }));
   await assertSucceeds(getDocs(collection(db, 'classes/c1/students')));
   await assertSucceeds(setDoc(doc(db, 'classes/c1/marks/m2'), { score: 5 }));
+  await assertSucceeds(setDoc(doc(db, 'classes/c1/tracker/settings'), { max: {}, extra: [] }));
+  await assertSucceeds(getDoc(doc(db, 'classes/c1/tracker/settings')));
   await assertSucceeds(getDocs(collection(db, 'classes/c1/members')));
 });
 

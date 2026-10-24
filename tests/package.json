@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Developer tests only. The website itself has no build step and no npm.",
   "scripts": {
-    "test:planner": "node --test planner.test.js",
+    "test:planner": "node --test planner.test.js tracker.test.js",
     "test:rules": "firebase emulators:exec --config ../firebase.json --only firestore --project demo-termwise \"node --test rules.test.js\"",
     "test:store": "firebase emulators:exec --config ../firebase.json --only firestore,auth,storage --project demo-termwise \"node --test --test-force-exit store.test.js\"",
     "test": "npm run test:planner && npm run test:rules && npm run test:storage && npm run test:store",

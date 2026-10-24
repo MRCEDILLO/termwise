@@ -126,6 +126,26 @@ test('teacher creates a class, a student joins, the key is regenerated, the clas
   await teacher.deleteFile(id, sheet);
   assert.deepEqual((await teacher.listFiles(id)).map((f) => f.name), ['Answers.pdf']);
 
+  // Tracker: names, marks and settings are the teacher's alone.
+  const sam = { id: teacher.newStudentId(id), name: 'Sam Patel' };
+  const ava = { id: teacher.newStudentId(id), name: 'Ava Nguyen' };
+  await teacher.saveStudents(id, [sam, ava]);
+  await teacher.setMark(id, sam.id, 'a', `a-${a.id}`, 17);
+  await teacher.setMark(id, sam.id, 'h', `h-${a.id}`, true);
+  await teacher.setMark(id, ava.id, 'a', `a-${a.id}`, 'IE');
+  await teacher.saveTracker(id, { scale: [], max: { [`a-${a.id}`]: 20 }, extra: [] });
+  assert.deepEqual((await teacher.getStudents(id)).map((s) => s.name).sort(), ['Ava Nguyen', 'Sam Patel']);
+  assert.deepEqual((await teacher.getMarks(id))[sam.id], { a: { [`a-${a.id}`]: 17 }, h: { [`h-${a.id}`]: true } });
+  assert.equal((await teacher.getTracker(id)).max[`a-${a.id}`], 20);
+  await teacher.setMark(id, sam.id, 'a', `a-${a.id}`, null);
+  assert.deepEqual((await teacher.getMarks(id))[sam.id].a, {}, 'a cleared cell is removed');
+  await assert.rejects(student.getStudents(id));
+  await assert.rejects(student.getMarks(id));
+  await assert.rejects(student.getTracker(id));
+  await teacher.deleteStudent(id, ava.id);
+  assert.deepEqual((await teacher.getStudents(id)).map((s) => s.name), ['Sam Patel']);
+  assert.equal((await teacher.getMarks(id))[ava.id], undefined, 'their marks go too');
+
   // New key: the student is cut off until they enter it.
   const newKey = await teacher.regenerateKey(id);
   assert.notEqual(newKey, cls.currentKey);

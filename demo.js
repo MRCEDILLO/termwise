@@ -4,7 +4,7 @@
 import { newKey } from './keys.js';
 import { emptyPlan } from './planner.js';
 
-const DATA_KEY = 'termwise-demo-v3';
+const DATA_KEY = 'termwise-demo-v4';
 const USER_KEY = 'termwise-demo-user-v1';
 const memory = {};
 
@@ -85,6 +85,40 @@ export function sampleClass() {
   };
 }
 
+// Made-up names for the sample class list.
+const SAMPLE_STUDENTS = [
+  'Ava Nguyen', 'Leo Papadopoulos', 'Mia Thompson', 'Noah Singh', 'Isla Murphy', 'Oliver Chen', 'Zara Ahmed',
+  'Jack Wilson', 'Chloe Rossi', 'Lucas Kowalski', 'Grace Kelly', 'Ethan Tran', 'Ruby Okafor', 'Harry Brown',
+  'Sienna Lee', 'Max Fernando', 'Amelia Walsh', 'Kai Takahashi', 'Ella Harris', 'Sam Patel', 'Lily Martin',
+  'Finn O\'Brien', 'Maya Ibrahim', 'Archie Clarke',
+];
+
+// Sample marks for the first three terms' assessments and homework, the same every time.
+function sampleTracker(lessons) {
+  let seed = 7;
+  const rand = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
+  const students = SAMPLE_STUDENTS.map((name) => ({ id: uid(), name }));
+  const marks = {};
+  const max = {};
+  const past = lessons.filter((l) => l.term && l.term <= 3);
+  past.filter((l) => l.assessment).forEach((l, i) => { max[`a-${l.id}`] = [20, 25, 30, 40, 50][i % 5]; });
+  students.forEach((s, n) => {
+    const ability = 0.45 + 0.5 * ((n * 37) % 24) / 23; // spread from weaker to stronger
+    const a = {};
+    const h = {};
+    for (const l of past) {
+      if (l.assessment) {
+        const m = max[`a-${l.id}`];
+        if (rand() < 0.03) a[`a-${l.id}`] = 'IE';
+        else a[`a-${l.id}`] = Math.round(m * Math.min(1, Math.max(0.1, ability + (rand() - 0.5) * 0.3)));
+      }
+      if (l.homework) h[`h-${l.id}`] = rand() < 0.4 + ability * 0.55;
+    }
+    marks[s.id] = { a, h };
+  });
+  return { students, marks, tracker: { max, extra: [] } };
+}
+
 /* ---------- the store ---------- */
 
 export function createDemoStore() {
@@ -101,6 +135,10 @@ export function createDemoStore() {
       units: { sample: s.units },
       lessons: { sample: s.lessons },
       announcements: { sample: s.announcements },
+      ...(() => {
+        const t = sampleTracker(s.lessons);
+        return { students: { sample: t.students }, marks: { sample: t.marks }, trackers: { sample: t.tracker } };
+      })(),
       members: {},
       allowedTeachers: [],
     };
@@ -230,6 +268,31 @@ export function createDemoStore() {
       data.announcements[id] = data.announcements[id].filter((p) => p.id !== postId);
       persist();
     },
+
+    async getStudents(id) { return structuredClone((data.students ||= {})[id] || []); },
+    newStudentId() { return uid(); },
+    async saveStudents(id, list) {
+      const all = ((data.students ||= {})[id] ||= []);
+      list.forEach((s) => {
+        const i = all.findIndex((x) => x.id === s.id);
+        if (i >= 0) all[i] = { id: s.id, name: s.name }; else all.push({ id: s.id, name: s.name });
+      });
+      persist();
+    },
+    async deleteStudent(id, studentId) {
+      data.students[id] = (data.students[id] || []).filter((s) => s.id !== studentId);
+      if (data.marks && data.marks[id]) delete data.marks[id][studentId];
+      persist();
+    },
+    async getMarks(id) { return structuredClone((data.marks ||= {})[id] || {}); },
+    async setMark(id, studentId, kind, colId, value) {
+      const m = (((data.marks ||= {})[id] ||= {})[studentId] ||= {});
+      const cells = (m[kind] ||= {});
+      if (value === null) delete cells[colId]; else cells[colId] = value;
+      persist();
+    },
+    async getTracker(id) { return structuredClone((data.trackers ||= {})[id] || null); },
+    async saveTracker(id, tracker) { (data.trackers ||= {})[id] = structuredClone(tracker); persist(); },
 
     // Demo files stay in memory only, so they disappear when the page reloads.
     async listFiles(classId) { return (demoFiles[classId] || []).map(({ blob, ...f }) => ({ ...f })); },
