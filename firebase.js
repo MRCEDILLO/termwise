@@ -7,8 +7,12 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
   getFirestore, doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc,
-  writeBatch, query, where, orderBy, serverTimestamp,
+  writeBatch, query, where, orderBy, serverTimestamp, Timestamp,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import {
+  getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject,
+} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js';
+import { FILE_TYPES, fileExt, storageName } from './files.js';
 import { newKey } from './keys.js';
 import { emptyPlan } from './planner.js';
 
@@ -16,6 +20,13 @@ export function createFirebaseStore(config) {
   const app = initializeApp(config);
   const auth = getAuth(app);
   const db = getFirestore(app);
+  const storage = getStorage(app);
+  const fileRef = (classId, f) => ref(storage, `classes/${classId}/files/${f.id}/${storageName(f.name)}`);
+  // Firestore keeps unlockAt as a Timestamp; the app uses milliseconds.
+  const fileFromDoc = (d) => {
+    const data = d.data();
+    return { id: d.id, ...data, unlockAt: data.unlockAt ? data.unlockAt.toMillis() : null };
+  };
 
   const toUser = (u) => u && {
     uid: u.uid,
@@ -150,6 +161,51 @@ export function createFirebaseStore(config) {
       const b = writeBatch(db);
       lessons.forEach((l, i) => b.update(doc(db, 'classes', id, 'lessons', l.id), { order: i }));
       await b.commit();
+    },
+
+    /* ---------- lesson files ---------- */
+
+    async listFiles(classId) {
+      const snap = await getDocs(collection(db, 'classes', classId, 'files'));
+      return snap.docs.map(fileFromDoc);
+    },
+
+    // The record goes in first, then the file. If the upload fails the record is removed.
+    async uploadFile(classId, lessonId, file, { locked = false } = {}, onProgress = () => {}) {
+      const id = doc(collection(db, 'classes', classId, 'files')).id;
+      const meta = {
+        lessonId, name: file.name.slice(0, 200), size: file.size, type: FILE_TYPES[fileExt(file.name)],
+        locked, unlocked: false, unlockAt: null, createdAt: serverTimestamp(),
+      };
+      const recRef = doc(db, 'classes', classId, 'files', id);
+      await setDoc(recRef, meta);
+      try {
+        const task = uploadBytesResumable(fileRef(classId, { id, name: meta.name }), file, { contentType: meta.type });
+        task.on('state_changed', (s) => onProgress(s.bytesTransferred / s.totalBytes));
+        await task;
+      } catch (e) {
+        await deleteDoc(recRef).catch(() => {});
+        throw e;
+      }
+      return { id, ...meta, createdAt: Date.now() };
+    },
+
+    updateFile(classId, fileId, patch) {
+      const p = { ...patch };
+      if ('unlockAt' in p) p.unlockAt = p.unlockAt == null ? null : Timestamp.fromMillis(p.unlockAt);
+      return updateDoc(doc(db, 'classes', classId, 'files', fileId), p);
+    },
+
+    async deleteFile(classId, f) {
+      await deleteObject(fileRef(classId, f)).catch((e) => {
+        if (e.code !== 'storage/object-not-found') throw e;
+      });
+      await deleteDoc(doc(db, 'classes', classId, 'files', f.id));
+    },
+
+    // A link to open or download the file. Refused by the rules while a file is still locked.
+    fileUrl(classId, f) {
+      return getDownloadURL(fileRef(classId, f));
     },
 
     /* ---------- students ---------- */

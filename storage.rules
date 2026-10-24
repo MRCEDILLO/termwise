@@ -1,9 +1,47 @@
 rules_version = '2';
 
-// Termwise Storage rules. File uploads arrive in Phase 3 (lesson materials).
-// Until then nothing can be read or written.
+// Termwise Storage rules: lesson files.
+// Files live at classes/{classId}/files/{fileId}/{name}. Their record in Firestore
+// (classes/{classId}/files/{fileId}) says whether the file is teacher-only and when it unlocks.
+// Only the class's teacher can upload or delete. Students who joined with the current key can
+// read a file once it is open: not teacher-only, switched on, or past its unlock date.
 service firebase.storage {
   match /b/{bucket}/o {
+
+    function classData(classId) {
+      return firestore.get(/databases/(default)/documents/classes/$(classId)).data;
+    }
+
+    function isOwner(classId) {
+      return request.auth != null
+        && request.auth.token.firebase.sign_in_provider == 'google.com'
+        && classData(classId).owner == request.auth.uid;
+    }
+
+    function isMember(classId) {
+      let c = classData(classId);
+      let m = /databases/(default)/documents/classes/$(classId)/members/$(request.auth.uid);
+      return request.auth != null && c.archived == false
+        && firestore.exists(m) && firestore.get(m).data.key == c.currentKey;
+    }
+
+    function isOpen(classId, fileId) {
+      let f = firestore.get(/databases/(default)/documents/classes/$(classId)/files/$(fileId)).data;
+      return f.locked == false || f.unlocked == true || (f.unlockAt != null && request.time >= f.unlockAt);
+    }
+
+    // PDF, PowerPoint, Word and common pictures, up to 50 MB (see files.js).
+    function allowedUpload() {
+      return request.resource.size > 0 && request.resource.size <= 50 * 1024 * 1024
+        && request.resource.contentType.matches('application/pdf|application/vnd[.]openxmlformats-officedocument[.](presentationml[.]presentation|wordprocessingml[.]document)|image/(png|jpeg|gif|webp)');
+    }
+
+    match /classes/{classId}/files/{fileId}/{fileName} {
+      allow read: if isOwner(classId) || (isMember(classId) && isOpen(classId, fileId));
+      allow create, update: if isOwner(classId) && allowedUpload();
+      allow delete: if isOwner(classId);
+    }
+
     match /{allPaths=**} {
       allow read, write: if false;
     }

@@ -107,6 +107,7 @@ export function createDemoStore() {
     return !c.archived && data.members[`${id}/${user.uid}`] === c.currentKey;
   };
   const tick = () => new Promise((r) => setTimeout(r, 0));
+  const demoFiles = {};
 
   return {
     mode: 'demo',
@@ -166,6 +167,27 @@ export function createDemoStore() {
       const pos = new Map(lessons.map((l, i) => [l.id, i]));
       data.lessons[id].forEach((l) => { if (pos.has(l.id)) l.order = pos.get(l.id); });
       persist();
+    },
+
+    // Demo files stay in memory only, so they disappear when the page reloads.
+    async listFiles(classId) { return (demoFiles[classId] || []).map(({ blob, ...f }) => ({ ...f })); },
+    async uploadFile(classId, lessonId, file, { locked = false } = {}, onProgress = () => {}) {
+      onProgress(1);
+      const f = { id: uid(), lessonId, name: file.name.slice(0, 200), size: file.size, type: file.type, locked, unlocked: false, unlockAt: null, createdAt: Date.now() };
+      (demoFiles[classId] ||= []).push({ ...f, blob: URL.createObjectURL(file) });
+      return f;
+    },
+    async updateFile(classId, fileId, patch) {
+      Object.assign((demoFiles[classId] || []).find((f) => f.id === fileId) || {}, patch);
+    },
+    async deleteFile(classId, f) {
+      demoFiles[classId] = (demoFiles[classId] || []).filter((x) => x.id !== f.id);
+    },
+    async fileUrl(classId, f) {
+      const rec = (demoFiles[classId] || []).find((x) => x.id === f.id);
+      const open = rec && (!rec.locked || rec.unlocked || (rec.unlockAt != null && Date.now() >= rec.unlockAt));
+      if (!rec || (!open && user.uid !== data.classes[classId].owner)) throw Object.assign(new Error('locked'), { code: 'storage/unauthorized' });
+      return rec.blob;
     },
 
     async joinWithKey(key) {

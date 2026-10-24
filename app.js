@@ -4,6 +4,7 @@
 import { FIREBASE_CONFIG, SITE_NAME } from './config.js';
 import { createDemoStore } from './demo.js';
 import { normaliseKey, formatKey } from './keys.js';
+import { ACCEPT, fileProblem, isOpen, fileSize, fileIcon } from './files.js';
 import {
   schedule, emptyPlan, isAssessmentLike, currentWeek, weekRange, slotLabel, cellText, lessonTerm, slotDate,
   DAYS, PERIODS_PER_DAY, MAX_WEEKS, TERM_COUNT, clampWeeks,
@@ -287,8 +288,11 @@ async function showClass(id, tab) {
         </section>`));
       return;
     }
-    const [plan, lessons] = await Promise.all([store.getPlan(id), store.getLessons(id)]);
-    state.cls = { id, cls, plan, lessons, isOwner: cls.owner === state.user.uid };
+    const [plan, lessons, files] = await Promise.all([
+      store.getPlan(id), store.getLessons(id),
+      store.listFiles(id).catch((e) => { console.error(e); return []; }),
+    ]);
+    state.cls = { id, cls, plan, lessons, files, uploads: [], isOwner: cls.owner === state.user.uid };
     sortByTerm(state.cls);
     state.cls.editTerm = (currentWeek(plan, todayISO()) || { term: 1 }).term;
     recompute();
@@ -449,6 +453,7 @@ function lessonEditor(c) {
           <button class="icon-btn" data-action="move" data-dir="1" aria-label="Move lesson ${i + 1} down" ${raw(i === mine.length - 1 ? 'disabled' : '')}>↓</button>
           <button class="icon-btn danger" data-action="delete-lesson" aria-label="Delete lesson ${i + 1}">✕</button>
         </div>
+        ${teacherFiles(c, l)}
       </li>`;
   });
   return html`
@@ -650,6 +655,7 @@ function weekCalendar(c) {
         <span class="tile-title">${a ? html`<span aria-label="Assessment">★ </span>` : ''}${l.title}</span>
         ${part ? html`<span class="tile-part">${part}</span>` : ''}
         ${l.homework ? html`<span class="tag">Homework</span>` : ''}
+        ${studentFiles(c, l.id)}
       </div>`);
       p += span - 1;
     }
@@ -682,6 +688,114 @@ function weekCalendar(c) {
       </div>
       <p class="hint">Use the arrows, the ← → keys or the notches above to flip between weeks. ★ marks assessments.</p>
     </section>`;
+}
+
+/* ---------- lesson files ---------- */
+
+const filesFor = (c, lessonId) => c.files.filter((f) => f.lessonId === lessonId)
+  .sort((a, b) => (a.locked - b.locked) || a.name.localeCompare(b.name));
+const msToISO = (ms) => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+// Files on a lesson card: attach, mark teacher-only, set an unlock date or unlock now.
+function teacherFiles(c, l) {
+  const files = filesFor(c, l.id);
+  const ups = c.uploads.filter((u) => u.lessonId === l.id);
+  return html`
+    <div class="lesson-files">
+      ${files.length || ups.length ? html`<ul class="file-list">
+        ${files.map((f) => html`<li class="file-row ${f.locked ? 'locked' : ''}" data-file="${f.id}">
+          <button class="file-chip" data-action="open-file" data-file="${f.id}" title="Open ${f.name}">
+            <span class="file-icon" aria-hidden="true">${fileIcon(f.name)}</span>
+            <span class="file-name">${f.name}</span>
+            <span class="file-size">${fileSize(f.size)}</span>
+          </button>
+          <label class="check"><input type="checkbox" data-ffield="locked" ${raw(f.locked ? 'checked' : '')}> Teacher only</label>
+          ${f.locked ? html`
+            <label class="unlock-date">Unlocks <input type="date" data-ffield="unlockAt" value="${f.unlockAt ? msToISO(f.unlockAt) : ''}" aria-label="Unlock date for ${f.name}"></label>
+            <label class="check"><input type="checkbox" data-ffield="unlocked" ${raw(f.unlocked ? 'checked' : '')}> Unlocked now</label>
+            <span class="tag ${isOpen(f) ? '' : 'bad'}">${isOpen(f) ? 'Students can open' : 'Hidden from students'}</span>` : ''}
+          <button class="icon-btn danger" data-action="delete-file" aria-label="Delete ${f.name}">✕</button>
+        </li>`)}
+        ${ups.map((u) => html`<li class="file-row uploading"><span class="file-chip"><span class="file-icon" aria-hidden="true">${fileIcon(u.name)}</span>
+          <span class="file-name">${u.name}</span><span class="file-size" id="up-${u.key}">Uploading ${Math.round(u.pct * 100)}%</span></span></li>`)}
+      </ul>` : ''}
+      <div class="file-add">
+        <label class="btn small">Attach files<input type="file" multiple accept="${ACCEPT}" data-upload="${l.id}" class="sr-only"></label>
+        <label class="btn small">Attach teacher-only file<input type="file" multiple accept="${ACCEPT}" data-upload="${l.id}" data-locked="1" class="sr-only"></label>
+      </div>
+    </div>`;
+}
+
+// Files as students see them: a link, or a lock with when it opens.
+function studentFiles(c, lessonId) {
+  const files = filesFor(c, lessonId);
+  if (!files.length) return '';
+  return html`<ul class="file-links">${files.map((f) => isOpen(f) || c.isOwner
+    ? html`<li><button class="file-link" data-action="open-file" data-file="${f.id}">
+        <span class="file-icon" aria-hidden="true">${fileIcon(f.name)}</span><span class="file-name">${f.name}</span></button></li>`
+    : html`<li class="file-locked"><span class="file-icon" aria-hidden="true">🔒</span>
+        <span class="file-name">${f.name}</span>
+        <span class="file-when">${f.unlockAt ? `opens ${fmtDay(msToISO(f.unlockAt))}` : 'your teacher will unlock this'}</span></li>`)}</ul>`;
+}
+
+async function uploadFiles(input) {
+  const c = state.cls;
+  const lessonId = input.dataset.upload;
+  const locked = input.dataset.locked === '1';
+  const picked = [...input.files];
+  input.value = '';
+  for (const file of picked) {
+    const problem = fileProblem(file);
+    if (problem) { toast(problem, 'error'); continue; }
+    const up = { key: Math.random().toString(36).slice(2), lessonId, name: file.name, pct: 0 };
+    c.uploads.push(up);
+    renderPanel();
+    try {
+      const f = await store.uploadFile(c.id, lessonId, file, { locked }, (pct) => {
+        up.pct = pct;
+        const el = document.getElementById(`up-${up.key}`);
+        if (el) el.textContent = `Uploading ${Math.round(pct * 100)}%`;
+      });
+      c.files.push(f);
+      toast(`Uploaded ${file.name}`);
+    } catch (e) {
+      console.error(e);
+      toast(`Couldn't upload ${file.name}. Check your connection and try again.`, 'error');
+    }
+    c.uploads = c.uploads.filter((u) => u !== up);
+    renderPanel();
+  }
+}
+
+async function openFile(fileId) {
+  const c = state.cls;
+  const f = c.files.find((x) => x.id === fileId);
+  if (!f) return;
+  // Open the tab straight away (pop-up blockers allow it during the click), then fill it in.
+  const win = window.open('', '_blank');
+  try {
+    const url = await store.fileUrl(c.id, f);
+    if (win) win.location.href = url; else location.href = url;
+  } catch (e) {
+    if (win) win.close();
+    console.error(e);
+    toast(e && e.code === 'storage/unauthorized' ? "This file isn't open yet." : "Couldn't open the file. Try again.", 'error');
+  }
+}
+
+async function updateFile(fileId, field, el) {
+  const c = state.cls;
+  const f = c.files.find((x) => x.id === fileId);
+  if (!f) return;
+  const patch = field === 'unlockAt'
+    ? { unlockAt: el.value ? new Date(`${el.value}T00:00:00`).getTime() : null }
+    : { [field]: el.checked };
+  Object.assign(f, patch);
+  renderPanel();
+  await saving(store.updateFile(c.id, fileId, patch));
 }
 
 /* ---------- lessons: week by week (students, and teacher preview) ---------- */
@@ -721,6 +835,7 @@ function weekItems(r, slots) {
         ${isAssessmentLike(l) ? html`<span class="tag assess-tag">★ Assessment</span>` : ''}
         ${l.homework ? html`<span class="tag">Homework</span>` : ''}
         <div class="times">${times}</div>
+        ${studentFiles(state.cls, l.id)}
       </div>
     </li>`;
   });
@@ -984,10 +1099,21 @@ $app.addEventListener('click', async (ev) => {
     const id = btn.closest('[data-id]').dataset.id;
     const l = lessonById(id);
     if (!confirm(`Delete "${l.title}"? Lessons after it will move earlier.`)) return;
+    const files = filesFor(c, id);
+    if (files.length && !confirm(`This also deletes its ${files.length === 1 ? 'file' : `${files.length} files`}.`)) return;
     c.lessons = c.lessons.filter((x) => x.id !== id);
+    c.files = c.files.filter((f) => f.lessonId !== id);
     recompute();
     renderPanel();
-    await saving(store.deleteLesson(c.id, id), 'Lesson deleted');
+    await saving(Promise.all([store.deleteLesson(c.id, id), ...files.map((f) => store.deleteFile(c.id, f))]), 'Lesson deleted');
+  } else if (action === 'open-file') {
+    await openFile(btn.dataset.file);
+  } else if (action === 'delete-file') {
+    const f = c.files.find((x) => x.id === btn.closest('[data-file]').dataset.file);
+    if (!f || !confirm(`Delete ${f.name}? Students won't be able to open it any more.`)) return;
+    c.files = c.files.filter((x) => x !== f);
+    renderPanel();
+    await saving(store.deleteFile(c.id, f), 'File deleted');
   } else if (action === 'toggle-pattern') {
     const set = new Set(c.plan.pattern);
     const k = btn.dataset.key;
@@ -1074,6 +1200,8 @@ $app.addEventListener('submit', async (ev) => {
 $app.addEventListener('change', async (ev) => {
   const el = ev.target;
   const c = state.cls;
+  if (c && el.dataset.upload) { await uploadFiles(el); return; }
+  if (c && el.dataset.ffield) { await updateFile(el.closest('[data-file]').dataset.file, el.dataset.ffield, el); return; }
   if (!c || !el.dataset.field) return;
   const lessonEl = el.closest('[data-id]');
   if (lessonEl) {

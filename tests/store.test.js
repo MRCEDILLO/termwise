@@ -1,4 +1,4 @@
-// End-to-end test of firebase.js against the Auth and Firestore emulators, with the real rules.
+// End-to-end test of firebase.js against the Auth, Firestore and Storage emulators, with the real rules.
 // firebase.js imports Firebase from the CDN, so this copies it with the imports pointed at
 // the npm package, the emulators connected, and Google's pop-up swapped for an emulator token.
 // Run with: npm run test:store
@@ -15,17 +15,22 @@ before(async () => {
     .replace('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js', 'firebase/app')
     .replace('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js', 'firebase/auth')
     .replace('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js', 'firebase/firestore')
+    .replace('https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js', 'firebase/storage')
+    .replace("'./files.js'", `'${new URL('../files.js', import.meta.url)}'`)
     .replace("'./keys.js'", `'${new URL('../keys.js', import.meta.url)}'`)
     .replace("'./planner.js'", `'${new URL('../planner.js', import.meta.url)}'`)
     .replace('initializeApp(config)', 'initializeApp(config, config.appName)')
     .replace('const db = getFirestore(app);', `const db = getFirestore(app);
   connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
   connectFirestoreEmulator(db, '127.0.0.1', 8080);`)
+    .replace('const storage = getStorage(app);', `const storage = getStorage(app);
+  connectStorageEmulator(storage, '127.0.0.1', 9199);`)
     .replace('signInWithPopup(auth, new GoogleAuthProvider())', 'signInWithCredential(auth, GoogleAuthProvider.credential(config.fakeGoogleToken))');
   src = `import { connectAuthEmulator, signInWithCredential } from 'firebase/auth';
 import { connectFirestoreEmulator } from 'firebase/firestore';
+import { connectStorageEmulator } from 'firebase/storage';
 ${src}`;
-  for (const needle of ['firebase/app', 'connectAuthEmulator(auth', 'signInWithCredential(auth', 'config.appName']) {
+  for (const needle of ['firebase/app', 'firebase/storage', 'connectStorageEmulator(storage', 'connectAuthEmulator(auth', 'signInWithCredential(auth', 'config.appName']) {
     assert.ok(src.includes(needle), `patch failed: ${needle}`);
   }
   mkdirSync(new URL('.tmp/', here), { recursive: true });
@@ -35,7 +40,7 @@ ${src}`;
 });
 
 const config = (appName, token) => ({
-  apiKey: 'demo-key', authDomain: 'demo-termwise.firebaseapp.com', projectId: 'demo-termwise', appName,
+  apiKey: 'demo-key', authDomain: 'demo-termwise.firebaseapp.com', projectId: 'demo-termwise', storageBucket: 'demo-termwise.appspot.com', appName,
   fakeGoogleToken: token && JSON.stringify(token),
 });
 
@@ -77,6 +82,22 @@ test('teacher creates a class, a student joins, the key is regenerated, the clas
   assert.equal((await student.getClass(id)).name, '8A Maths');
   assert.deepEqual((await student.getLessons(id)).map((l) => l.title), ['1B', '1A']);
   assert.deepEqual((await student.getPlan(id)).pattern, ['1-1', '3-2']);
+
+  // Files: an ordinary file opens; a teacher-only one stays shut until the switch is flipped.
+  const pdf = (name) => new File([new Uint8Array([37, 80, 68, 70])], name);
+  const sheet = await teacher.uploadFile(id, a.id, pdf('Worksheet.pdf'));
+  const answers = await teacher.uploadFile(id, a.id, pdf('Answers.pdf'), { locked: true });
+  await assert.rejects(teacher.uploadFile(id, a.id, new File(['x'], 'run.exe')), 'other file types are refused');
+  assert.deepEqual((await student.listFiles(id)).map((f) => f.name).sort(), ['Answers.pdf', 'Worksheet.pdf']);
+  assert.ok(await student.fileUrl(id, sheet));
+  await assert.rejects(student.fileUrl(id, answers), /unauthorized/);
+  assert.ok(await teacher.fileUrl(id, answers), 'the teacher can always open it');
+  await teacher.updateFile(id, answers.id, { unlockAt: Date.now() + 86400000 });
+  await assert.rejects(student.fileUrl(id, answers), /unauthorized/, 'not until the date');
+  await teacher.updateFile(id, answers.id, { unlocked: true });
+  assert.ok(await student.fileUrl(id, answers));
+  await teacher.deleteFile(id, sheet);
+  assert.deepEqual((await teacher.listFiles(id)).map((f) => f.name), ['Answers.pdf']);
 
   // New key: the student is cut off until they enter it.
   const newKey = await teacher.regenerateKey(id);
