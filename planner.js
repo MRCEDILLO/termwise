@@ -7,9 +7,10 @@
 //     pattern: ['1-2', '3-5', ...]   // 'day-period' strings, day 1..5 (Mon..Fri), period 1..6
 //     events:  [{ id, term: 1..4, week: 1..20, day: 'All' | 1..5, period: 'All' | 1..6, label }]
 //   }
-//   lessons = [{ id, title, periods, assessment, homework }, ...] in teaching order
+//   lessons = [{ id, term: 1..4, title, periods, assessment, homework }, ...] in teaching order
 //
-// Lessons fill the free class periods in order and run on from one term into the next.
+// Each lesson belongs to one term. A term's lessons fill that term's free class periods in
+// order; lessons that don't fit are flagged rather than spilling into the next term.
 
 export const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 export const PERIODS_PER_DAY = 6;
@@ -31,6 +32,12 @@ export function emptyPlan() {
 // Same rule as the spreadsheet's red tint, plus the lesson's own assessment flag.
 export function isAssessmentLike(lesson) {
   return !!(lesson && (lesson.assessment || ASSESSMENT_WORDS.test(lesson.title || '')));
+}
+
+// The term a lesson is taught in (1..4). Lessons saved before terms were chosen count as Term 1.
+export function lessonTerm(lesson) {
+  const t = Math.floor(Number(lesson && lesson.term));
+  return t >= 1 && t <= TERM_COUNT ? t : 1;
 }
 
 // Periods a lesson takes. Blank, negative or non-numbers count as 0 (skipped).
@@ -131,53 +138,57 @@ export function schedule(plan, lessons) {
     }
   });
 
-  // 2. Cumulative lesson positions (the spreadsheet's start / cum columns).
-  let cum = 0;
-  const out = lessons.map((lesson, index) => {
-    const eff = effectivePeriods(lesson);
-    const startAt = cum + 1;
-    cum += eff;
-    return { ...lesson, index, effective: eff, startAt, endAt: cum, slots: [] };
-  });
-  const required = cum;
-
-  // 3. Fill free periods in order.
-  const free = slots.filter((s) => !s.blocked);
-  const available = free.length;
-  let li = 0;
-  free.forEach((slot, i) => {
-    const n = i + 1;
-    if (n > required) return;
-    while (li < out.length && out[li].endAt < n) li++;
-    const lesson = out[li];
-    slot.lessonIndex = li;
-    slot.part = n - lesson.startAt + 1;
-    slot.of = lesson.effective;
-    lesson.slots.push(slot);
-  });
-
-  for (const lesson of out) {
-    if (lesson.effective === 0) lesson.status = 'skipped';
-    else if (lesson.startAt > available) lesson.status = 'noroom';
-    else if (lesson.endAt > available) lesson.status = 'overterm';
-    else lesson.status = 'scheduled';
-    lesson.start = lesson.slots[0] || null;
-    lesson.end = lesson.slots[lesson.slots.length - 1] || null;
-  }
-
-  const finishes = required > 0 && available > 0 ? free[Math.min(required, available) - 1] : null;
-
+  // 2. Each lesson belongs to one term and fills that term's free periods in order
+  //    (the spreadsheet's start / cum columns, worked out per term).
+  const out = lessons.map((lesson, index) => ({
+    ...lesson, index, term: lessonTerm(lesson), effective: effectivePeriods(lesson), slots: [],
+  }));
   const perTerm = terms.map((term, ti) => {
-    const mine = slots.filter((s) => s.term === ti + 1);
+    const termNo = ti + 1;
+    const mine = slots.filter((s) => s.term === termNo);
+    const free = mine.filter((s) => !s.blocked);
+    const list = out.filter((l) => l.term === termNo);
+    let cum = 0;
+    for (const lesson of list) {
+      lesson.startAt = cum + 1;
+      cum += lesson.effective;
+      lesson.endAt = cum;
+    }
+    let li = 0;
+    free.forEach((slot, i) => {
+      const n = i + 1;
+      if (n > cum) return;
+      while (li < list.length && list[li].endAt < n) li++;
+      const lesson = list[li];
+      slot.lessonIndex = lesson.index;
+      slot.part = n - lesson.startAt + 1;
+      slot.of = lesson.effective;
+      lesson.slots.push(slot);
+    });
+    for (const lesson of list) {
+      if (lesson.effective === 0) lesson.status = 'skipped';
+      else if (lesson.startAt > free.length) lesson.status = 'noroom';
+      else if (lesson.endAt > free.length) lesson.status = 'overterm';
+      else lesson.status = 'scheduled';
+      lesson.start = lesson.slots[0] || null;
+      lesson.end = lesson.slots[lesson.slots.length - 1] || null;
+    }
     return {
-      term: ti + 1,
+      term: termNo,
       weeks: clampWeeks(term && term.weeks),
-      available: mine.filter((s) => !s.blocked).length,
-      blocked: mine.filter((s) => s.blocked).length,
+      lessons: list.length,
+      available: free.length,
+      blocked: mine.length - free.length,
       used: mine.filter((s) => s.lessonIndex !== null).length,
+      required: cum,
+      spare: free.length - cum,
+      fits: cum <= free.length,
+      finishes: cum > 0 && free.length > 0 ? free[Math.min(cum, free.length) - 1] : null,
     };
   });
 
+  const available = perTerm.reduce((n, t) => n + t.available, 0);
+  const required = perTerm.reduce((n, t) => n + t.required, 0);
   return {
     columns: cols,
     meetingsPerWeek: cols.length,
@@ -186,15 +197,18 @@ export function schedule(plan, lessons) {
     available,
     required,
     spare: available - required,
-    fits: required <= available,
-    finishes,
+    fits: perTerm.every((t) => t.fits),
     perTerm,
   };
 }
 
 /* ---------- reading the result ---------- */
 
-// The term and week a date falls in, or the next one coming up, or the last one.
+// Which week students should see for a date, and why:
+//   'week'     a school day inside a term week
+//   'weekend'  Saturday or Sunday: shows the coming week (next term's first week in the holidays)
+//   'holidays' between terms, or before Term 1: shows the next term's first week
+//   'ended'    after the last term: shows the last week
 export function currentWeek(plan, todayISO) {
   const today = parseISO(todayISO);
   const weeks = [];
@@ -202,14 +216,20 @@ export function currentWeek(plan, todayISO) {
     const n = clampWeeks(term.weeks);
     for (let w = 1; w <= n; w++) {
       const r = weekRange(term, w);
-      if (r) weeks.push({ term: ti + 1, week: w, from: parseISO(r.from), to: parseISO(r.to) + 2 * DAY_MS });
+      if (r) weeks.push({ term: ti + 1, week: w, from: parseISO(r.from), to: parseISO(r.to) });
     }
   });
-  if (!weeks.length || today === null) return weeks.length ? { term: weeks[0].term, week: weeks[0].week } : null;
-  const hit = weeks.find((w) => today >= w.from && today <= w.to) ||
-    weeks.find((w) => w.from > today) ||
-    weeks[weeks.length - 1];
-  return { term: hit.term, week: hit.week };
+  if (!weeks.length) return null;
+  const pick = (w, state) => ({ term: w.term, week: w.week, state });
+  if (today === null) return pick(weeks[0], 'holidays');
+  const inWeek = weeks.find((w) => today >= w.from && today <= w.to);
+  if (inWeek) return pick(inWeek, 'week');
+  const next = weeks.find((w) => w.from > today);
+  if (!next) return pick(weeks[weeks.length - 1], 'ended');
+  // Saturday or Sunday straight after a term week rolls on to the next week.
+  const prev = weeks.filter((w) => w.to < today).pop();
+  const weekend = prev && today - prev.to <= 2 * DAY_MS;
+  return pick(next, weekend && next.from - prev.to <= 3 * DAY_MS ? 'weekend' : 'holidays');
 }
 
 export function slotLabel(slot) {

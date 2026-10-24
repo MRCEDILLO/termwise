@@ -22,8 +22,8 @@ test('lessons fill free periods in order', () => {
   const names = r.slots.map((s) => cellText(s, r.lessons));
   assert.deepEqual(names, ['1A (1/2)', '1A (2/2)', '1B', '1C (1/2)', '1C (2/2)', '']);
   assert.equal(r.lessons[2].start.week, 2);
-  assert.equal(r.finishes.week, 2);
-  assert.equal(r.finishes.day, 3);
+  assert.equal(r.perTerm[0].finishes.week, 2);
+  assert.equal(r.perTerm[0].finishes.day, 3);
 });
 
 test('0 periods skips a lesson, blank and junk count as 0', () => {
@@ -63,17 +63,30 @@ test('red banner numbers: short by, no room and over term', () => {
   assert.equal(r.fits, false);
   assert.equal(r.spare, -2);
   assert.deepEqual(r.lessons.map((l) => l.status), ['scheduled', 'overterm', 'noroom']);
-  assert.equal(r.finishes.day, 5);
+  assert.equal(r.perTerm[0].finishes.day, 5);
+  assert.equal(r.perTerm[0].spare, -2);
 });
 
-test('lessons carry on from one term into the next', () => {
+test('each term schedules only its own lessons', () => {
   const plan = basePlan([1, 1, 0, 0]);
   plan.terms[1].start = '2027-04-19';
-  const r = schedule(plan, [L('A', 2), L('Unit 2', 3)]);
-  assert.equal(r.lessons[1].start.term, 1);
-  assert.equal(r.lessons[1].end.term, 2);
-  assert.equal(r.lessons[1].end.date, '2027-04-21');
-  assert.deepEqual(r.perTerm.map((t) => t.used), [3, 2, 0, 0]);
+  const r = schedule(plan, [
+    L('T2 first', 1, { term: 2 }), L('T1 A', 2), L('T1 B', 2, { term: 1 }), L('T2 second', 1, { term: 2 }),
+  ]);
+  const names = r.slots.map((s) => cellText(s, r.lessons));
+  assert.deepEqual(names, ['T1 A (1/2)', 'T1 A (2/2)', 'T1 B (1/2)', 'T2 first', 'T2 second', '']);
+  // T1 B doesn't fit in Term 1, and does not spill into Term 2.
+  assert.equal(r.lessons[2].status, 'overterm');
+  assert.equal(r.lessons[2].end.term, 1);
+  assert.equal(r.lessons[3].start.date, '2027-04-21');
+  assert.deepEqual(r.perTerm.map((t) => [t.required, t.available, t.fits]), [[4, 3, false], [2, 3, true], [0, 0, true], [0, 0, true]]);
+  assert.equal(r.fits, false);
+});
+
+test('a lesson with no term, or a bad one, counts as Term 1', () => {
+  const plan = basePlan([1, 1, 0, 0]);
+  const r = schedule(plan, [L('A', 1, { term: 7 }), L('B', 1, { term: '' })]);
+  assert.deepEqual(r.lessons.map((l) => l.start.term), [1, 1]);
 });
 
 test('reordering lessons reorders the timetable', () => {
@@ -94,7 +107,7 @@ test('weeks are capped at 20 and the pattern ignores bad keys', () => {
   const r = schedule(plan, []);
   assert.equal(r.meetingsPerWeek, 3);
   assert.equal(r.available, 60);
-  assert.equal(r.finishes, null);
+  assert.equal(r.perTerm[0].finishes, null);
 });
 
 test('auto-tint words match the spreadsheet', () => {
@@ -105,11 +118,23 @@ test('auto-tint words match the spreadsheet', () => {
   assert.equal(isAssessmentLike({ title: 'Fractions', assessment: true }), true);
 });
 
-test('current week: inside, between terms, after the year', () => {
+test('current week from today\'s date', () => {
   const plan = basePlan([2, 2, 0, 0]);
   plan.terms[1].start = '2027-04-19';
-  assert.deepEqual(currentWeek(plan, '2027-02-03'), { term: 1, week: 2 });
-  assert.deepEqual(currentWeek(plan, '2027-02-06'), { term: 1, week: 2 }); // Saturday stays in the week
-  assert.deepEqual(currentWeek(plan, '2027-03-15'), { term: 2, week: 1 });
-  assert.deepEqual(currentWeek(plan, '2027-12-01'), { term: 2, week: 2 });
+  const cw = (d) => currentWeek(plan, d);
+  assert.deepEqual(cw('2027-01-10'), { term: 1, week: 1, state: 'holidays' }); // before Term 1
+  assert.deepEqual(cw('2027-02-03'), { term: 1, week: 2, state: 'week' });
+  assert.deepEqual(cw('2027-01-30'), { term: 1, week: 2, state: 'weekend' }); // Saturday after week 1
+  assert.deepEqual(cw('2027-02-06'), { term: 2, week: 1, state: 'holidays' }); // Saturday after the last week
+  assert.deepEqual(cw('2027-03-15'), { term: 2, week: 1, state: 'holidays' });
+  assert.deepEqual(cw('2027-04-18'), { term: 2, week: 1, state: 'holidays' });
+  assert.deepEqual(cw('2027-04-19'), { term: 2, week: 1, state: 'week' });
+  assert.deepEqual(cw('2027-12-01'), { term: 2, week: 2, state: 'ended' });
+  assert.equal(currentWeek(emptyPlanNoDates(), '2027-02-03'), null);
 });
+
+function emptyPlanNoDates() {
+  const p = emptyPlan();
+  p.terms = p.terms.map(() => ({ start: '', weeks: 10 }));
+  return p;
+}

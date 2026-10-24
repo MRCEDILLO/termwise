@@ -194,13 +194,41 @@ legend { font-weight: 700; font-size: .92rem; color: var(--ink-2); margin-bottom
 .seg button { border: 0; background: transparent; padding: 6px 14px; border-radius: 999px; font-weight: 700; color: var(--ink-2); cursor: pointer; }
 .seg button.on { background: var(--primary-soft); color: var(--primary); }
 
+/* ---------- term picker ---------- */
+.term-picker { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; }
+.term-picker button {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 14px;
+  border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface); cursor: pointer; text-align: left;
+}
+.term-picker button:hover { border-color: var(--primary); }
+.term-picker button.on { border: 2px solid var(--primary); background: var(--primary-soft); padding: 9px 13px; }
+.tp-name { font: 700 1rem var(--font-head); }
+.term-picker button.on .tp-name { color: var(--primary); }
+.tp-meta { font-size: .82rem; color: var(--ink-2); }
+.tp-short { color: var(--bad); font-weight: 700; }
+.add-lessons h3 { margin-bottom: 12px; }
+.term-move { display: flex; align-items: center; gap: 6px; font-size: .82rem; }
+.term-move select { width: auto !important; margin: 0 !important; padding: 6px 8px !important; }
+
+/* ---------- this week (students) ---------- */
+.this-week {
+  background: var(--surface); border: 2px solid var(--primary); border-radius: var(--radius);
+  padding: clamp(16px, 2.5vw, 24px); margin-bottom: 28px; box-shadow: 0 0 0 4px var(--primary-soft), var(--shadow);
+}
+.this-week .today { color: var(--primary); font-weight: 700; margin: 0 0 4px; }
+.this-week h2 { font-size: clamp(1.25rem, 1.1rem + .6vw, 1.5rem); margin: 0 0 2px; }
+.this-week .wk-range { margin: 0 0 14px; }
+.this-week .wk-items { padding: 0; }
+.this-week .empty.small { padding: 0; }
+.all-weeks { margin: 8px 0 4px; }
+
 /* ---------- lesson editor ---------- */
 .lesson-list { list-style: none; margin: 0 0 20px; padding: 0; display: grid; gap: 8px; }
 .week-sep { display: flex; gap: 10px; align-items: baseline; padding: 12px 4px 2px; font: 700 .9rem var(--font-head); color: var(--ink-2); }
 .week-sep span { font: 400 .85rem var(--font-body); color: var(--ink-3); }
 .lesson {
   display: grid; align-items: center; gap: 8px 14px;
-  grid-template-columns: auto auto minmax(0, 1fr) 90px auto auto auto;
+  grid-template-columns: auto auto minmax(0, 1fr) 90px auto auto auto auto;
   background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--line-2);
   border-radius: 10px; padding: 8px 10px; box-shadow: var(--shadow);
 }
@@ -313,7 +341,7 @@ dialog form { display: grid; gap: 14px; }
   .setup-grid { grid-template-columns: minmax(0, 1fr); }
   .lesson {
     grid-template-columns: auto auto minmax(0, 1fr) auto;
-    grid-template-areas: "grip main main main" ". per per tools" ". as hw hw";
+    grid-template-areas: "grip main main main" ". per per tools" ". as hw hw" ". move move move";
     gap: 6px 12px;
   }
   .lesson .num { display: none; }
@@ -323,6 +351,8 @@ dialog form { display: grid; gap: 14px; }
   .lesson .periods { grid-area: per; justify-self: start; }
   .lesson .check.as { grid-area: as; }
   .lesson .check.hw { grid-area: hw; }
+  .lesson .term-move { grid-area: move; }
+  .term-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .lesson-meta { padding: 0 8px; }
   .terms-table th { white-space: nowrap; }
   .events thead { display: none; }

@@ -5,7 +5,7 @@ import { FIREBASE_CONFIG, SITE_NAME } from './config.js';
 import { createDemoStore } from './demo.js';
 import { normaliseKey, formatKey } from './keys.js';
 import {
-  schedule, emptyPlan, isAssessmentLike, currentWeek, weekRange, slotLabel, cellText,
+  schedule, emptyPlan, isAssessmentLike, currentWeek, weekRange, slotLabel, cellText, lessonTerm,
   DAYS, PERIODS_PER_DAY, MAX_WEEKS, TERM_COUNT, clampWeeks,
 } from './planner.js';
 
@@ -47,6 +47,7 @@ const todayISO = () => {
 const fmt = (iso, opts) => (iso ? new Date(`${iso}T00:00:00`).toLocaleDateString('en-AU', opts) : '');
 const fmtDay = (iso) => fmt(iso, { weekday: 'short', day: 'numeric', month: 'short' });
 const fmtShort = (iso) => fmt(iso, { day: 'numeric', month: 'short' });
+const fmtLong = (iso) => fmt(iso, { weekday: 'long', day: 'numeric', month: 'long' });
 const rangeText = (r) => (r ? `${fmtShort(r.from)} – ${fmtShort(r.to)}` : '');
 
 /* ---------- small things ---------- */
@@ -288,6 +289,8 @@ async function showClass(id, tab) {
     }
     const [plan, lessons] = await Promise.all([store.getPlan(id), store.getLessons(id)]);
     state.cls = { id, cls, plan, lessons, isOwner: cls.owner === state.user.uid };
+    sortByTerm(state.cls);
+    state.cls.editTerm = (currentWeek(plan, todayISO()) || { term: 1 }).term;
     recompute();
   }
   const c = state.cls;
@@ -325,41 +328,61 @@ function renderPanel() {
   else if (c.tab === 'setup') show(panel, setupPanel(c));
   else if (c.isOwner && state.view === 'edit') show(panel, lessonEditor(c));
   else show(panel, weekList(c));
-  if (c.tab === 'lessons' && (!c.isOwner || state.view === 'weeks') && !c.scrolled) {
-    c.scrolled = true;
-    const cur = panel.querySelector('.week.current');
-    if (cur) cur.scrollIntoView({ block: 'start' });
-  }
 }
 
 /* ---------- capacity banner ---------- */
 
-function finishText(r) {
-  if (!r.finishes) return '';
-  const s = r.finishes;
-  return `Term ${s.term} Week ${s.week}${s.date ? ` (${fmtDay(s.date)})` : ''}`;
+function finishText(t) {
+  if (!t.finishes) return '';
+  const s = t.finishes;
+  return `Week ${s.week}${s.date ? ` (${fmtDay(s.date)})` : ''}`;
 }
 
-function capacityBanner(r) {
-  if (!r.meetingsPerWeek) {
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+function setupFirstBanner() {
+  return html`<div class="banner info" role="status"><span class="banner-icon" aria-hidden="true">i</span>
+    <span>Tick the periods this class meets on the <strong>Setup</strong> tab to start the timetable.</span></div>`;
+}
+
+// One term's capacity, as in the spreadsheet's banner.
+function termBanner(r, t) {
+  if (!r.meetingsPerWeek) return setupFirstBanner();
+  if (!t.weeks) {
     return html`<div class="banner info" role="status"><span class="banner-icon" aria-hidden="true">i</span>
-      <span>Tick the periods this class meets on the <strong>Setup</strong> tab to start the timetable.</span></div>`;
+      <span>Term ${t.term} has no weeks yet. Set its start date and weeks on the <strong>Setup</strong> tab.</span></div>`;
   }
-  if (!r.required) {
+  if (!t.required) {
     return html`<div class="banner info" role="status"><span class="banner-icon" aria-hidden="true">i</span>
-      <span>Add your lessons to get started. ${r.available} class periods are free this year.</span></div>`;
+      <span>Add your Term ${t.term} lessons to get started. ${plural(t.available, 'class period')} are free this term.</span></div>`;
   }
-  if (r.fits) {
+  if (t.fits) {
     return html`<div class="banner good" role="status"><span class="banner-icon" aria-hidden="true">✓</span>
-      <span><strong>All lessons fit.</strong> ${r.required} of ${r.available} periods used, ${r.spare} spare. Course finishes ${finishText(r)}.</span></div>`;
+      <span><strong>All Term ${t.term} lessons fit.</strong> ${t.required} of ${t.available} periods used, ${t.spare} spare. Finishes ${finishText(t)}.</span></div>`;
   }
   return html`<div class="banner bad" role="status"><span class="banner-icon" aria-hidden="true">!</span>
-    <span><strong>Short by ${-r.spare} period${-r.spare === 1 ? '' : 's'}.</strong> Lessons need ${r.required} periods but only ${r.available} are free. Shorten or skip lessons, or add weeks.</span></div>`;
+    <span><strong>Term ${t.term} is short by ${plural(-t.spare, 'period')}.</strong> Its lessons need ${t.required} periods but only ${t.available} are free. Shorten, skip or move lessons to another term, or add weeks.</span></div>`;
+}
+
+// Every term at once, for the Timetable tab.
+function yearBanner(r) {
+  if (!r.meetingsPerWeek) return setupFirstBanner();
+  if (!r.required) {
+    return html`<div class="banner info" role="status"><span class="banner-icon" aria-hidden="true">i</span>
+      <span>Add lessons on the <strong>Lessons</strong> tab to fill the timetable.</span></div>`;
+  }
+  const short = r.perTerm.filter((t) => !t.fits);
+  if (!short.length) {
+    return html`<div class="banner good" role="status"><span class="banner-icon" aria-hidden="true">✓</span>
+      <span><strong>All lessons fit.</strong> ${r.required} of ${r.available} periods used this year, ${r.spare} spare.</span></div>`;
+  }
+  return html`<div class="banner bad" role="status"><span class="banner-icon" aria-hidden="true">!</span>
+    <span><strong>${short.map((t) => `Term ${t.term} is short by ${plural(-t.spare, 'period')}`).join('. ')}.</strong> Fix it on the Lessons tab.</span></div>`;
 }
 
 /* ---------- lessons: teacher editor ---------- */
 
-const STATUS_TEXT = { skipped: 'Skipped', noroom: 'No room', overterm: 'Runs past the year' };
+const statusText = (l) => ({ skipped: 'Skipped', noroom: `No room in Term ${l.term}`, overterm: `Runs past the end of Term ${l.term}` })[l.status];
 
 function viewToggle() {
   return html`
@@ -369,10 +392,23 @@ function viewToggle() {
     </div>`;
 }
 
+function termPicker(c) {
+  return html`
+    <div class="term-picker" role="group" aria-label="Choose a term">
+      ${c.result.perTerm.map((t) => html`
+        <button class="${t.term === c.editTerm ? 'on' : ''}" aria-pressed="${t.term === c.editTerm}" data-action="pick-term" data-term="${t.term}">
+          <span class="tp-name">Term ${t.term}</span>
+          <span class="tp-meta">${plural(t.lessons, 'lesson')}${t.fits ? '' : html` · <span class="tp-short">short ${-t.spare}</span>`}</span>
+        </button>`)}
+    </div>`;
+}
+
 function lessonEditor(c) {
   const r = c.result;
+  const t = r.perTerm[c.editTerm - 1];
+  const mine = r.lessons.filter((l) => l.term === c.editTerm);
   let lastWeek = '';
-  const items = r.lessons.map((l, i) => {
+  const items = mine.map((l, i) => {
     let sep = '';
     if (l.start) {
       const wk = `${l.start.term}-${l.start.week}`;
@@ -383,7 +419,7 @@ function lessonEditor(c) {
       }
     }
     const when = l.start
-      ? (l.start === l.end ? slotLabel(l.start) : `${slotLabel(l.start)} → ${l.end.term !== l.start.term ? `T${l.end.term} ` : ''}Wk ${l.end.week} ${DAYS[l.end.day - 1]} P${l.end.period}`)
+      ? (l.start === l.end ? slotLabel(l.start) : `${slotLabel(l.start)} → Wk ${l.end.week} ${DAYS[l.end.day - 1]} P${l.end.period}`)
       : '';
     return html`${sep}
       <li class="lesson ${l.status !== 'scheduled' ? `st-${l.status}` : ''} ${isAssessmentLike(l) ? 'assess' : ''}" data-id="${l.id}">
@@ -393,7 +429,7 @@ function lessonEditor(c) {
           <input class="title-input" data-field="title" value="${l.title}" aria-label="Lesson ${i + 1} title" maxlength="200">
           <div class="lesson-meta">
             ${when ? html`<span class="when">${when}</span>` : ''}
-            ${STATUS_TEXT[l.status] ? html`<span class="tag ${l.status === 'skipped' ? '' : 'bad'}">${STATUS_TEXT[l.status]}</span>` : ''}
+            ${statusText(l) ? html`<span class="tag ${l.status === 'skipped' ? '' : 'bad'}">${statusText(l)}</span>` : ''}
             ${isAssessmentLike(l) ? html`<span class="tag assess-tag">★ Assessment</span>` : ''}
           </div>
         </div>
@@ -402,22 +438,29 @@ function lessonEditor(c) {
         </label>
         <label class="check as"><input type="checkbox" data-field="assessment" ${raw(l.assessment ? 'checked' : '')}> Assessment</label>
         <label class="check hw"><input type="checkbox" data-field="homework" ${raw(l.homework ? 'checked' : '')}> Homework</label>
+        <label class="term-move">Term
+          <select data-field="term" aria-label="Move lesson ${i + 1} to another term">
+            ${[1, 2, 3, 4].map((n) => html`<option value="${n}" ${raw(n === l.term ? 'selected' : '')}>${n}</option>`)}
+          </select>
+        </label>
         <div class="lesson-tools">
           <button class="icon-btn" data-action="move" data-dir="-1" aria-label="Move lesson ${i + 1} up" ${raw(i === 0 ? 'disabled' : '')}>↑</button>
-          <button class="icon-btn" data-action="move" data-dir="1" aria-label="Move lesson ${i + 1} down" ${raw(i === r.lessons.length - 1 ? 'disabled' : '')}>↓</button>
+          <button class="icon-btn" data-action="move" data-dir="1" aria-label="Move lesson ${i + 1} down" ${raw(i === mine.length - 1 ? 'disabled' : '')}>↓</button>
           <button class="icon-btn danger" data-action="delete-lesson" aria-label="Delete lesson ${i + 1}">✕</button>
         </div>
       </li>`;
   });
   return html`
-    ${capacityBanner(r)}
     <div class="panel-head">
-      <h2>Lessons <span class="count">${r.lessons.length}</span></h2>
+      <h2>Lessons</h2>
       ${viewToggle()}
     </div>
-    <p class="hint">Drag cards, or use the arrows, to change the order. Set periods to 0 to skip a lesson. Later lessons move automatically.</p>
-    ${r.lessons.length ? html`<ol class="lesson-list" data-list="lessons">${items}</ol>` : ''}
+    ${termPicker(c)}
+    ${termBanner(r, t)}
+    <p class="hint">Drag cards, or use the arrows, to change the order. Set periods to 0 to skip a lesson. Later lessons move automatically. Use the Term box on a card to move it to another term.</p>
+    ${mine.length ? html`<ol class="lesson-list" data-list="lessons">${items}</ol>` : html`<p class="empty">No lessons in Term ${c.editTerm} yet.</p>`}
     <section class="card add-lessons">
+      <h3>Add lessons to Term ${c.editTerm}</h3>
       <form class="add-row" data-form="add-lesson">
         <label class="grow">New lesson <input name="title" required maxlength="200" placeholder="e.g. 3A Equivalent fractions"></label>
         <label class="periods">Periods <input name="periods" type="number" min="0" max="20" value="1"></label>
@@ -428,7 +471,7 @@ function lessonEditor(c) {
         <form data-form="paste-lessons">
           <p class="hint">One lesson per line. Copying the Lesson and Periods columns from your Term Planner spreadsheet works too: a number after a tab or a comma is the periods (1 if left out).</p>
           <textarea name="text" rows="6" placeholder="1A Ordering integers	1&#10;1B Adding and subtracting	2"></textarea>
-          <button class="btn" type="submit">Add these lessons</button>
+          <button class="btn" type="submit">Add these lessons to Term ${c.editTerm}</button>
         </form>
       </details>
     </section>`;
@@ -443,26 +486,49 @@ async function updateLesson(id, field, value) {
   if (!lesson) return;
   if (field === 'periods') value = Math.max(0, Math.min(20, Math.floor(Number(value)) || 0));
   if (field === 'title') value = String(value).trim().slice(0, 200) || lesson.title;
+  if (field === 'term') {
+    // Moving to another term puts the lesson at the end of that term's list.
+    lesson.term = lessonTerm({ term: value });
+    lesson.order = Math.max(...state.cls.lessons.map((l) => l.order)) + 1;
+    sortByTerm(state.cls);
+    recompute();
+    renderPanel();
+    await saving(Promise.all([store.saveLesson(state.cls.id, lesson), store.saveOrder(state.cls.id, state.cls.lessons)]), `Moved to Term ${lesson.term}`);
+    return;
+  }
   lesson[field] = value;
   recompute();
   renderPanel();
   await saving(store.saveLesson(state.cls.id, lesson));
 }
 
+// Lessons in term order (stable, so each term keeps its own order), numbered 0, 1, 2…
+function sortByTerm(c) {
+  c.lessons.sort((a, b) => lessonTerm(a) - lessonTerm(b) || (a.order ?? 0) - (b.order ?? 0));
+  c.lessons.forEach((l, i) => { l.order = i; });
+}
+
+function termLessons(c) {
+  return c.lessons.filter((l) => lessonTerm(l) === c.editTerm);
+}
+
 async function addLessons(rows) {
   const c = state.cls;
+  const base = c.lessons.length ? Math.max(...c.lessons.map((l) => l.order)) + 1 : 0;
   const added = rows.map((row, i) => ({
     id: store.newLessonId(c.id),
+    term: c.editTerm,
     title: row.title,
     periods: row.periods,
     assessment: false,
     homework: false,
-    order: c.lessons.length + i,
+    order: base + i,
   }));
   c.lessons.push(...added);
+  sortByTerm(c);
   recompute();
   renderPanel();
-  const ok = await saving(Promise.all(added.map((l) => store.saveLesson(c.id, l))), added.length > 1 ? `Added ${added.length} lessons` : 'Lesson added');
+  const ok = await saving(Promise.all([...added.map((l) => store.saveLesson(c.id, l)), store.saveOrder(c.id, c.lessons)]), added.length > 1 ? `Added ${added.length} lessons` : 'Lesson added');
   if (ok) document.querySelector('[data-form="add-lesson"] input[name="title"]')?.focus();
 }
 
@@ -473,87 +539,127 @@ function parsePasted(text) {
   }).filter((r) => r.title);
 }
 
+// toIndex is a position in the chosen term's list.
 async function reorder(fromId, toIndex) {
-  const list = state.cls.lessons;
+  const c = state.cls;
+  const list = termLessons(c);
   const from = list.findIndex((l) => l.id === fromId);
   if (from < 0 || toIndex === from) return;
   const [moved] = list.splice(from, 1);
   list.splice(toIndex > from ? toIndex - 1 : toIndex, 0, moved);
-  list.forEach((l, i) => { l.order = i; });
+  c.lessons = [...c.lessons.filter((l) => lessonTerm(l) !== c.editTerm), ...list];
+  c.lessons.forEach((l, i) => { l.order = i; });
+  sortByTerm(c);
   recompute();
   renderPanel();
-  await saving(store.saveOrder(state.cls.id, list), 'Order saved');
+  await saving(store.saveOrder(c.id, c.lessons), 'Order saved');
 }
 
 /* ---------- lessons: week by week (students, and teacher preview) ---------- */
 
-function weekList(c) {
-  const r = c.result;
-  const cur = currentWeek(c.plan, todayISO());
+function slotsByWeek(r) {
   const byWeek = new Map();
   for (const s of r.slots) {
     const k = `${s.term}-${s.week}`;
     if (!byWeek.has(k)) byWeek.set(k, []);
     byWeek.get(k).push(s);
   }
+  return byWeek;
+}
+
+// One week's lessons and cancelled periods. Consecutive periods of the same lesson become one entry.
+function weekItems(r, slots) {
+  const entries = [];
+  for (const s of slots) {
+    const last = entries[entries.length - 1];
+    if (!s.blocked && s.lessonIndex !== null && last && last.lessonIndex === s.lessonIndex) last.slots.push(s);
+    else entries.push({ lessonIndex: s.blocked ? null : s.lessonIndex, blocked: s.blocked, slots: [s] });
+  }
+  const items = entries.filter((e) => e.blocked || e.lessonIndex !== null).map((e) => {
+    const times = e.slots.map((s) => `${s.date ? fmtDay(s.date) : DAYS[s.day - 1]} P${s.period}`).join(' · ');
+    if (e.blocked) {
+      const s = e.slots[0];
+      return html`<li class="wk-item cancelled"><span class="tag">Cancelled</span>
+        <div><strong>${s.label || 'No class'}</strong><div class="times">${times}</div></div></li>`;
+    }
+    const l = r.lessons[e.lessonIndex];
+    const continued = e.slots[0].part > 1;
+    return html`<li class="wk-item ${isAssessmentLike(l) ? 'assess' : ''}">
+      <span class="periods-pill" title="Periods">${e.slots.length}P</span>
+      <div class="wk-main">
+        <strong>${l.title}</strong>
+        ${continued ? html`<span class="tag">continued</span>` : ''}
+        ${isAssessmentLike(l) ? html`<span class="tag assess-tag">★ Assessment</span>` : ''}
+        ${l.homework ? html`<span class="tag">Homework</span>` : ''}
+        <div class="times">${times}</div>
+      </div>
+    </li>`;
+  });
+  return items.length ? html`<ul class="wk-items">${items}</ul>` : html`<p class="empty small">No lessons this week.</p>`;
+}
+
+// The panel students see first: today's date and the week that matters now.
+function thisWeekPanel(c, cur, byWeek) {
+  const today = todayISO();
+  const term = c.plan.terms[cur.term - 1];
+  const range = weekRange(term, cur.week);
+  const heading = {
+    week: `This week: Term ${cur.term}, Week ${cur.week}`,
+    weekend: `Coming up: Term ${cur.term}, Week ${cur.week}`,
+    holidays: `Holidays. Next up: Term ${cur.term}, Week ${cur.week}`,
+    ended: `The year has finished. Last week: Term ${cur.term}, Week ${cur.week}`,
+  }[cur.state];
+  return html`
+    <section class="this-week" aria-labelledby="this-week-h">
+      <p class="today">Today is ${fmtLong(today)}</p>
+      <h2 id="this-week-h">${heading}</h2>
+      <p class="wk-range">${range ? `${fmtLong(range.from)} to ${fmtLong(range.to)}` : ''}</p>
+      ${weekItems(c.result, byWeek.get(`${cur.term}-${cur.week}`) || [])}
+    </section>`;
+}
+
+function weekList(c) {
+  const r = c.result;
+  const cur = currentWeek(c.plan, todayISO());
+  const byWeek = slotsByWeek(r);
   const terms = c.plan.terms.map((term, ti) => {
     const weeks = clampWeeks(term.weeks);
     if (!weeks) return '';
     const weekBlocks = [];
     for (let w = 1; w <= weeks; w++) {
-      const slots = byWeek.get(`${ti + 1}-${w}`) || [];
       const isCur = cur && cur.term === ti + 1 && cur.week === w;
       const isPast = cur && (ti + 1 < cur.term || (ti + 1 === cur.term && w < cur.week));
-      // Consecutive periods of the same lesson become one entry.
-      const entries = [];
-      for (const s of slots) {
-        const last = entries[entries.length - 1];
-        if (!s.blocked && s.lessonIndex !== null && last && last.lessonIndex === s.lessonIndex) last.slots.push(s);
-        else entries.push({ lessonIndex: s.blocked ? null : s.lessonIndex, blocked: s.blocked, slots: [s] });
-      }
-      const items = entries.filter((e) => e.blocked || e.lessonIndex !== null).map((e) => {
-        const times = e.slots.map((s) => `${s.date ? fmtDay(s.date) : DAYS[s.day - 1]} P${s.period}`).join(' · ');
-        if (e.blocked) {
-          const s = e.slots[0];
-          return html`<li class="wk-item cancelled"><span class="tag">Cancelled</span>
-            <div><strong>${s.label || 'No class'}</strong><div class="times">${times}</div></div></li>`;
-        }
-        const l = r.lessons[e.lessonIndex];
-        const continued = e.slots[0].part > 1;
-        return html`<li class="wk-item ${isAssessmentLike(l) ? 'assess' : ''}">
-          <span class="periods-pill" title="Periods">${e.slots.length}P</span>
-          <div class="wk-main">
-            <strong>${l.title}</strong>
-            ${continued ? html`<span class="tag">continued</span>` : ''}
-            ${isAssessmentLike(l) ? html`<span class="tag assess-tag">★ Assessment</span>` : ''}
-            ${l.homework ? html`<span class="tag">Homework</span>` : ''}
-            <div class="times">${times}</div>
-          </div>
-        </li>`;
-      });
       const range = weekRange(term, w);
       weekBlocks.push(html`
         <details class="week ${isCur ? 'current' : ''}" ${raw(isPast ? '' : 'open')}>
           <summary>
             <span class="wk-title">Week ${w}</span>
             <span class="wk-range">${rangeText(range)}</span>
-            ${isCur ? html`<span class="tag now">This week</span>` : ''}
+            ${isCur ? html`<span class="tag now">${cur.state === 'week' ? 'This week' : 'Next'}</span>` : ''}
           </summary>
-          ${items.length ? html`<ul class="wk-items">${items}</ul>` : html`<p class="empty small">No lessons this week.</p>`}
+          ${weekItems(r, byWeek.get(`${ti + 1}-${w}`) || [])}
         </details>`);
     }
     return html`<section class="term-block"><h3>Term ${ti + 1}</h3>${weekBlocks}</section>`;
   });
+  if (!r.meetingsPerWeek) {
+    return html`
+      ${c.isOwner ? html`<div class="panel-head"><h2>Week by week</h2>${viewToggle()}</div>` : ''}
+      <p class="empty">Your teacher hasn't set up the timetable yet.</p>`;
+  }
   return html`
-    ${c.isOwner ? html`<div class="panel-head"><h2>Week by week</h2>${viewToggle()}</div>` : ''}
-    ${r.meetingsPerWeek ? terms : html`<p class="empty">Your teacher hasn't set up the timetable yet.</p>`}`;
+    ${c.isOwner ? html`<div class="panel-head"><h2>Student view</h2>${viewToggle()}</div>` : ''}
+    ${cur ? thisWeekPanel(c, cur, byWeek) : ''}
+    <h2 class="all-weeks">All weeks</h2>
+    <p class="hint">Past weeks are folded up. Click a week to open it.</p>
+    ${terms}`;
 }
 
 /* ---------- timetable ---------- */
 
 function timetablePanel(c) {
   const r = c.result;
-  if (!r.meetingsPerWeek) return capacityBanner(r);
+  if (!r.meetingsPerWeek) return setupFirstBanner();
   const cur = currentWeek(c.plan, todayISO());
   const cells = new Map(r.slots.map((s) => [`${s.term}-${s.week}-${s.day}-${s.period}`, s]));
   const head = r.columns.map((col) => html`<th scope="col">${DAYS[col.day - 1]}<span>P${col.period}</span></th>`);
@@ -565,7 +671,7 @@ function timetablePanel(c) {
     for (let w = 1; w <= weeks; w++) {
       const isCur = cur && cur.term === ti + 1 && cur.week === w;
       rows.push(html`<tr class="${isCur ? 'current' : ''}">
-        <th scope="row">Wk ${w}<span>${rangeText(weekRange(term, w))}</span>${isCur ? html`<span class="tag now">This week</span>` : ''}</th>
+        <th scope="row">Wk ${w}<span>${rangeText(weekRange(term, w))}</span>${isCur ? html`<span class="tag now">${cur.state === 'week' ? 'This week' : 'Next'}</span>` : ''}</th>
         ${r.columns.map((col) => {
           const s = cells.get(`${ti + 1}-${w}-${col.day}-${col.period}`);
           if (s.blocked) return html`<td class="cancelled"><span class="tag">Cancelled</span> ${s.label}</td>`;
@@ -578,13 +684,13 @@ function timetablePanel(c) {
     }
     return html`
       <section class="term-block">
-        <h3>Term ${ti + 1} <span class="term-meta">${t.used} of ${t.available} periods used${t.blocked ? `, ${t.blocked} cancelled` : ''}</span></h3>
+        <h3>Term ${ti + 1} <span class="term-meta">${t.used} of ${t.available} periods used${t.blocked ? `, ${t.blocked} cancelled` : ''}</span>${c.isOwner && !t.fits ? html` <span class="tag bad">Short by ${-t.spare}</span>` : ''}</h3>
         <div class="table-scroll" tabindex="0" role="region" aria-label="Term ${ti + 1} timetable">
           <table class="timetable"><thead><tr><th scope="col">Week</th>${head}</tr></thead><tbody>${rows}</tbody></table>
         </div>
       </section>`;
   });
-  return html`${c.isOwner ? capacityBanner(r) : ''}${tables}
+  return html`${c.isOwner ? yearBanner(r) : ''}${tables}
     <p class="hint">★ marks assessments, tests, quizzes, exams and reviews. Multi-period lessons show the part, e.g. (2/3).</p>`;
 }
 
@@ -619,7 +725,7 @@ function setupPanel(c) {
 
       <section class="card">
         <h2>Terms</h2>
-        <p class="hint">The first day of each term, and how many weeks it runs (up to ${MAX_WEEKS}). Lessons carry on from one term into the next.</p>
+        <p class="hint">The first day of each term, and how many weeks it runs (up to ${MAX_WEEKS}). You choose which term each lesson is in on the Lessons tab.</p>
         <table class="terms-table">
           <thead><tr><th scope="col">Term</th><th scope="col">Starts</th><th scope="col">Weeks</th></tr></thead>
           <tbody>
@@ -727,11 +833,14 @@ $app.addEventListener('click', async (ev) => {
     btn.closest('dialog').close();
   } else if (action === 'view') {
     state.view = btn.dataset.view;
-    c.scrolled = false;
     renderPanel();
+  } else if (action === 'pick-term') {
+    c.editTerm = Number(btn.dataset.term);
+    renderPanel();
+    document.querySelector(`[data-action="pick-term"][data-term="${c.editTerm}"]`)?.focus();
   } else if (action === 'move') {
     const id = btn.closest('[data-id]').dataset.id;
-    const i = c.lessons.findIndex((l) => l.id === id);
+    const i = termLessons(c).findIndex((l) => l.id === id);
     const dir = Number(btn.dataset.dir);
     await reorder(id, dir < 0 ? i - 1 : i + 2);
     document.querySelector(`[data-id="${id}"] [data-dir="${dir}"]`)?.focus();
@@ -896,7 +1005,7 @@ $app.addEventListener('drop', async (ev) => {
   if (!t) return;
   ev.preventDefault();
   const id = dragId;
-  const idx = state.cls.lessons.findIndex((l) => l.id === t.li.dataset.id);
+  const idx = termLessons(state.cls).findIndex((l) => l.id === t.li.dataset.id);
   await reorder(id, t.after ? idx + 1 : idx);
 });
 
