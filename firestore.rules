@@ -47,6 +47,16 @@ service cloud.firestore {
         && validKey(d.currentKey);
     }
 
+    function validFile(d) {
+      return d.keys().hasOnly(['lessonId', 'name', 'size', 'type', 'locked', 'unlocked', 'unlockAt', 'createdAt'])
+        && d.lessonId is string && d.lessonId.size() > 0
+        && d.name is string && d.name.size() > 0 && d.name.size() <= 200
+        && d.size is int && d.size > 0 && d.size <= 50 * 1024 * 1024
+        && d.type is string
+        && d.locked is bool && d.unlocked is bool
+        && (d.unlockAt == null || d.unlockAt is timestamp);
+    }
+
     /* ---------- teachers ---------- */
 
     match /teachers/{uid} {
@@ -112,10 +122,18 @@ service cloud.firestore {
         allow write: if isOwner(classId);
       }
 
-      // Everything else (students, marks, teacher-only file lists) is owner only.
+      // Lesson files. Students can see every file's record (so a teacher-only file can say when
+      // it unlocks); storage.rules decides whether they can open the file itself.
+      match /files/{fileId} {
+        allow read: if isOwner(classId) || isMember(classId);
+        allow create, update: if isOwner(classId) && validFile(request.resource.data);
+        allow delete: if isOwner(classId);
+      }
+
+      // Everything else (students, marks) is owner only.
       match /{sub}/{docId=**} {
         allow read, write: if isOwner(classId)
-          && !(sub in ['members', 'plan', 'lessons', 'announcements']);
+          && !(sub in ['members', 'plan', 'lessons', 'announcements', 'files']);
       }
     }
   }

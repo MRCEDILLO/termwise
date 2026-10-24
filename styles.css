@@ -288,6 +288,33 @@ legend { font-weight: 700; font-size: .92rem; color: var(--ink-2); margin-bottom
   .tile-day { display: none; }
 }
 
+/* ---------- lesson files ---------- */
+.lesson-files { grid-column: 1 / -1; border-top: 1px dashed var(--line); padding: 8px 0 2px 36px; display: grid; gap: 8px; }
+.file-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.file-row { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; }
+.file-row.locked { background: var(--warn-soft); border-radius: 8px; padding: 4px 6px; }
+.file-chip, .file-link {
+  display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%;
+  border: 1px solid var(--line-2); background: var(--surface); border-radius: 8px; padding: 4px 10px 4px 4px;
+  cursor: pointer; text-align: left; color: var(--ink);
+}
+.file-chip:hover, .file-link:hover { border-color: var(--primary); background: var(--primary-soft); }
+.file-row.uploading .file-chip { cursor: default; opacity: .75; }
+.file-icon { flex: none; font: 800 .65rem var(--font-head); letter-spacing: .02em; background: var(--primary); color: #fff; border-radius: 5px; padding: 3px 5px; }
+.file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; font-size: .9rem; }
+.file-size, .file-when { color: var(--ink-2); font-size: .8rem; white-space: nowrap; }
+.unlock-date { display: flex; align-items: center; gap: 6px; font-size: .82rem; }
+.unlock-date input { width: auto !important; margin: 0 !important; padding: 4px 8px !important; }
+.file-add { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn.small { min-height: 32px; padding: 4px 12px; font-size: .88rem; }
+.btn:focus-within { outline: 3px solid var(--focus); outline-offset: 2px; }
+.file-links { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; width: 100%; }
+.file-link { padding: 3px 8px 3px 3px; width: 100%; }
+.file-link .file-name { font-size: .82rem; }
+.file-locked { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: .82rem; color: var(--ink-2); }
+.file-locked .file-icon { background: none; padding: 0; font-size: .9rem; }
+.file-locked .file-name { font-weight: 400; }
+
 /* ---------- lesson editor ---------- */
 .lesson-list { list-style: none; margin: 0 0 20px; padding: 0; display: grid; gap: 8px; }
 .week-sep { display: flex; gap: 10px; align-items: baseline; padding: 12px 4px 2px; font: 700 .9rem var(--font-head); color: var(--ink-2); }
@@ -407,7 +434,7 @@ dialog form { display: grid; gap: 14px; }
   .setup-grid { grid-template-columns: minmax(0, 1fr); }
   .lesson {
     grid-template-columns: auto auto minmax(0, 1fr) auto;
-    grid-template-areas: "grip main main main" ". per per tools" ". as hw hw" ". move move move";
+    grid-template-areas: "grip main main main" ". per per tools" ". as hw hw" ". move move move" "files files files files";
     gap: 6px 12px;
   }
   .lesson .num { display: none; }
@@ -418,6 +445,7 @@ dialog form { display: grid; gap: 14px; }
   .lesson .check.as { grid-area: as; }
   .lesson .check.hw { grid-area: hw; }
   .lesson .term-move { grid-area: move; }
+  .lesson .lesson-files { grid-area: files; padding-left: 0; }
   .term-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .lesson-meta { padding: 0 8px; }
   .terms-table th { white-space: nowrap; }
