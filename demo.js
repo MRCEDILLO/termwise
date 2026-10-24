@@ -4,7 +4,7 @@
 import { newKey } from './keys.js';
 import { emptyPlan } from './planner.js';
 
-const DATA_KEY = 'termwise-demo-v1';
+const DATA_KEY = 'termwise-demo-v2';
 const USER_KEY = 'termwise-demo-user-v1';
 const memory = {};
 
@@ -24,7 +24,7 @@ const uid = () => Math.random().toString(36).slice(2, 12);
 /* ---------- sample class ---------- */
 
 const SAMPLE_UNITS = [
-  ['Integers', ['Ordering integers', 'Adding and subtracting', 'Multiplying and dividing', 'Order of operations']],
+  ['Integers', ['Ordering integers', 'Adding and subtracting', 'Multiplying and dividing']],
   ['Fractions', ['Equivalent fractions', 'Adding fractions', 'Multiplying fractions', 'Dividing fractions', 'Mixed numbers']],
   ['Decimals and percentages', ['Decimal place value', 'Fractions to percentages', 'Percentage of an amount', 'Percentage change']],
   ['Algebra', ['Pronumerals', 'Substitution', 'Like terms', 'Expanding brackets', 'Factorising']],
@@ -41,13 +41,15 @@ const SAMPLE_UNITS = [
 export function sampleClass() {
   const lessons = [];
   SAMPLE_UNITS.forEach(([unit, names], u) => {
+    const term = Math.floor(u / 3) + 1; // three units a term
     names.forEach((n, i) => lessons.push({
+      term,
       title: `${u + 1}${String.fromCharCode(65 + i)} ${n}`,
       periods: [2, 3, 2, 2, 3][i % 5],
       homework: i % 2 === 0,
     }));
-    lessons.push({ title: `${unit} review`, periods: 2 });
-    lessons.push({ title: `${unit} test`, periods: 1, assessment: true });
+    lessons.push({ term, title: `${unit} review`, periods: 2 });
+    lessons.push({ term, title: `${unit} test`, periods: 1, assessment: true });
   });
   const plan = emptyPlan();
   // Sample dates only (Victorian 2026 term starts). Change them on the Setup tab.
@@ -60,7 +62,7 @@ export function sampleClass() {
   plan.pattern = ['1-2', '2-4', '4-1', '5-3'];
   plan.events = [
     { id: uid(), term: 1, week: 7, day: 1, period: 'All', label: 'Labour Day' },
-    { id: uid(), term: 1, week: 9, day: 'All', period: 'All', label: 'Year 8 camp' },
+    { id: uid(), term: 1, week: 9, day: 4, period: 'All', label: 'Year 8 camp' },
     { id: uid(), term: 2, week: 4, day: 4, period: 'All', label: 'Athletics carnival' },
     { id: uid(), term: 3, week: 6, day: 2, period: 4, label: 'Excursion' },
     { id: uid(), term: 4, week: 4, day: 5, period: 3, label: 'Assembly' },
