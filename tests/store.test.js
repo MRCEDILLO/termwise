@@ -5,6 +5,8 @@
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { initializeTestEnvironment } from '@firebase/rules-unit-testing';
+import { doc, setDoc } from 'firebase/firestore';
 
 const here = new URL('./', import.meta.url);
 let createFirebaseStore;
@@ -37,6 +39,12 @@ ${src}`;
   const out = new URL('.tmp/firebase.node.js', here);
   writeFileSync(out, src);
   ({ createFirebaseStore } = await import(out));
+
+  // The admin has let Gabe and the other teacher in (written with the rules switched off).
+  const env = await initializeTestEnvironment({ projectId: 'demo-termwise', firestore: { host: '127.0.0.1', port: 8080 } });
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    for (const email of ['gabe@example.com', 'o@example.com']) await setDoc(doc(ctx.firestore(), 'allowedTeachers', email), { addedAt: 1 });
+  });
 });
 
 const config = (appName, token) => ({
@@ -52,10 +60,11 @@ function waitForUser(store) {
 
 test('teacher creates a class, a student joins, the key is regenerated, the class is archived', async () => {
   const run = Date.now();
-  const teacher = createFirebaseStore(config(`t${run}`, { sub: `gabe${run}`, email: 'gabe@example.com', name: 'Gabe' }));
+  const teacher = createFirebaseStore(config(`t${run}`, { sub: `gabe${run}`, email: 'gabe@example.com', email_verified: true, name: 'Gabe' }));
   await teacher.signInTeacher();
   const tu = await waitForUser(teacher);
   assert.equal(tu.isTeacher, true);
+  assert.equal(await teacher.isAllowedTeacher('Gabe@Example.com'), true);
 
   const id = await teacher.createClass({ name: '8A Maths', subject: 'Maths', year: '2027', colour: 2 });
   const mine = await teacher.listMyClasses();
@@ -133,11 +142,22 @@ test('teacher creates a class, a student joins, the key is regenerated, the clas
   assert.equal(await student.joinWithKey(newKey), id);
 
   // Another teacher can't see it.
-  const other = createFirebaseStore(config(`o${run}`, { sub: `other${run}`, email: 'o@example.com' }));
+  const other = createFirebaseStore(config(`o${run}`, { sub: `other${run}`, email: 'o@example.com', email_verified: true }));
   await other.signInTeacher();
   assert.equal(await other.getClass(id), null);
   assert.deepEqual(await other.listMyClasses(), []);
 
   await teacher.deleteLesson(id, a.id);
   assert.deepEqual((await teacher.getLessons(id)).map((l) => l.title), ['1B']);
+});
+
+test('a Google account the admin has not added cannot make a class', async () => {
+  const run = Date.now();
+  const stranger = createFirebaseStore(config(`n${run}`, { sub: `new${run}`, email: 'newbie@example.com', email_verified: true }));
+  await stranger.signInTeacher(); // signing in works; everything a teacher does is refused
+  await waitForUser(stranger);
+  assert.equal(await stranger.isAllowedTeacher('newbie@example.com'), false);
+  await assert.rejects(stranger.createClass({ name: 'Mine', subject: '', year: '', colour: 0 }));
+  await assert.rejects(stranger.listAllowedTeachers());
+  await assert.rejects(stranger.allowTeacher('newbie@example.com'));
 });

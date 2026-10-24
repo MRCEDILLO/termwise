@@ -58,11 +58,33 @@ export function createFirebaseStore(config) {
     async signInTeacher() {
       const cred = await signInWithPopup(auth, new GoogleAuthProvider());
       const u = cred.user;
-      await setDoc(doc(db, 'teachers', u.uid), { name: u.displayName || '', email: u.email || '' }, { merge: true });
+      // Refused for accounts not on the admin's list; the app shows them a "not on the list" page.
+      await setDoc(doc(db, 'teachers', u.uid), { name: u.displayName || '', email: u.email || '' }, { merge: true })
+        .catch((e) => { if (e.code !== 'permission-denied') throw e; });
     },
 
     signOut() {
       return signOut(auth);
+    },
+
+    /* ---------- who may be a teacher ---------- */
+
+    async isAllowedTeacher(email) {
+      const snap = await orNull(getDoc(doc(db, 'allowedTeachers', email.toLowerCase())));
+      return !!(snap && snap.exists());
+    },
+
+    async listAllowedTeachers() {
+      const snap = await getDocs(collection(db, 'allowedTeachers'));
+      return snap.docs.map((d) => ({ email: d.id, addedAt: d.data().addedAt || 0 }));
+    },
+
+    allowTeacher(email) {
+      return setDoc(doc(db, 'allowedTeachers', email.toLowerCase()), { addedAt: Date.now() });
+    },
+
+    removeTeacher(email) {
+      return deleteDoc(doc(db, 'allowedTeachers', email.toLowerCase()));
     },
 
     /* ---------- classes ---------- */

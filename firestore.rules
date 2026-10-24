@@ -3,7 +3,8 @@ rules_version = '2';
 // Termwise Firestore rules. These are the real lock: the website's code is public,
 // so every read and write is checked here.
 //
-// Teachers sign in with Google. Students get a silent anonymous sign-in and become a
+// Teachers sign in with Google, and only the admin and the emails on the admin's list
+// (allowedTeachers/{email}) count as teachers. Students get a silent anonymous sign-in and become a
 // member of a class by writing the class's current key into classes/{id}/members/{uid}.
 // Regenerating the key or archiving the class cuts every member off at once.
 service cloud.firestore {
@@ -15,8 +16,25 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isTeacher() {
+    function isGoogle() {
       return signedIn() && request.auth.token.firebase.sign_in_provider == 'google.com';
+    }
+
+    function myEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    // The admin's Google account. Also in config.js (ADMIN_EMAIL) and storage.rules.
+    function isAdmin() {
+      return isGoogle() && request.auth.token.email_verified == true
+        && myEmail() == 'gabrielcedillo2002@gmail.com';
+    }
+
+    // A Google account the admin has let in (or the admin).
+    function isTeacher() {
+      return isAdmin() || (isGoogle()
+        && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/allowedTeachers/$(myEmail())));
     }
 
     function classPath(classId) {
@@ -70,6 +88,18 @@ service cloud.firestore {
     }
 
     /* ---------- teachers ---------- */
+
+    // The admin's list of teacher emails (lower case, one doc each). A Google account can check
+    // whether its own email is on it; only the admin sees or changes the whole list.
+    match /allowedTeachers/{email} {
+      allow get: if isAdmin() || (isGoogle() && request.auth.token.email_verified == true && myEmail() == email);
+      allow list, delete: if isAdmin();
+      allow create, update: if isAdmin()
+        && email == email.lower()
+        && email.matches('^[^@\\s/]+@[^@\\s/]+[.][^@\\s/]+$')
+        && request.resource.data.keys().hasOnly(['addedAt'])
+        && request.resource.data.addedAt is int;
+    }
 
     match /teachers/{uid} {
       allow read, write: if isTeacher() && request.auth.uid == uid;

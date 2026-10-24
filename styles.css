@@ -497,6 +497,13 @@ label.inline select { width: auto; margin: 0; padding: 6px 10px; }
 a.up-title:hover { text-decoration: underline; }
 .more { font-weight: 700; font-size: .92rem; text-decoration: none; }
 
+/* ---------- teacher list (admin) ---------- */
+.teachers-head { max-width: 520px; margin-bottom: 0; }
+.allow-form { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 16px; }
+.allow-form label { flex: 1 1 260px; }
+.allow-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.allow-list li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 4px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+
 /* ---------- dialog and toast ---------- */
 dialog { border: 0; border-radius: 16px; padding: 24px; width: min(480px, calc(100vw - 32px)); box-shadow: 0 20px 60px rgba(27, 34, 50, .25); }
 dialog::backdrop { background: rgba(27, 34, 50, .4); }
