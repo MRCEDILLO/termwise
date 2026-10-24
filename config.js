@@ -13,12 +13,12 @@
    ===================================================================== */
 
 export const FIREBASE_CONFIG = {
-  apiKey: '',
-  authDomain: '',
-  projectId: '',
-  storageBucket: '',
-  messagingSenderId: '',
-  appId: '',
+  apiKey: 'AIzaSyApjpseJeJpFWW1xwI4JgYTC5F3_EDrP_w',
+  authDomain: 'termwise-1fed1.firebaseapp.com',
+  projectId: 'termwise-1fed1',
+  storageBucket: 'termwise-1fed1.firebasestorage.app',
+  messagingSenderId: '353381592713',
+  appId: '1:353381592713:web:f43c37f724050dbc34a058',
 };
 
 export const SITE_NAME = 'Termwise';
