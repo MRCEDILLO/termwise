@@ -587,7 +587,9 @@ dialog form { display: grid; gap: 14px; }
 .sum-col { font-weight: 700; white-space: nowrap; text-align: right !important; }
 .grid tbody .sum-col { background: #FAFBFC; }
 .hw-grid td { text-align: center; }
-.hw-grid .col-head { min-width: 92px; }
+.hw-grid .col-head { min-width: 104px; }
+.grid thead th.unit-col { border-top: 4px solid var(--unit); background: color-mix(in srgb, var(--unit) 12%, #F2F4F8); }
+.hw-col-tools { display: flex; gap: 4px; }
 button.hw { width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--surface); font-weight: 800; cursor: pointer; }
 button.hw:hover { border-color: var(--ink-3); }
 button.hw.done { background: var(--good-soft); border-color: #9DD3B5; color: var(--good); }

@@ -21,7 +21,11 @@ const store = FIREBASE_CONFIG.apiKey
 const $app = document.getElementById('app');
 const state = { user: undefined, cls: null };
 
-export const CLASS_COLOURS = ['#1F6FD1', '#0D8466', '#C2410C', '#7C3AED', '#BE185D', '#0E7490', '#4D7C0F', '#A16207'];
+// Banner and unit colours, all dark enough for white text. The rules allow up to 32.
+export const CLASS_COLOURS = [
+  '#1F6FD1', '#0D8466', '#C2410C', '#7C3AED', '#BE185D', '#0E7490', '#4D7C0F', '#A16207',
+  '#1E3A8A', '#B91C1C', '#166534', '#4338CA', '#86198F', '#475569', '#7C2D12', '#0F766E',
+];
 const colourOf = (c) => CLASS_COLOURS[(Number(c && c.colour) || 0) % CLASS_COLOURS.length];
 
 /* ---------- html helper: everything interpolated is escaped unless wrapped in raw() ---------- */
@@ -1392,6 +1396,12 @@ function trackerPanel(c) {
     ${body}`;
 }
 
+// A homework or assessment column takes its lesson's unit colour (grey for no unit or no lesson).
+function colUnitColour(c, col) {
+  const l = col.lessonId && lessonById(col.lessonId);
+  return l ? unitColour(c, unitIdOf(c, l)) : 'var(--line-2)';
+}
+
 function colHead(c, col) {
   return html`
     <span class="col-title">${col.lessonId ? html`<a href="${lessonUrl(c, col.lessonId)}">${col.title}</a>` : col.title}</span>
@@ -1468,9 +1478,12 @@ function homeworkView(c) {
       <table class="grid hw-grid">
         <thead><tr>
           <th scope="col" class="name-col">Student</th>
-          ${cols.map((col) => html`<th scope="col" class="col-head">
+          ${cols.map((col) => html`<th scope="col" class="col-head unit-col" style="--unit:${colUnitColour(c, col)}">
             ${colHead(c, col)}
-            <button class="btn tiny" data-action="hw-all" data-col="${col.id}" title="Mark every empty box done">All ✓</button>
+            <span class="hw-col-tools">
+              <button class="btn tiny" data-action="hw-all" data-col="${col.id}" title="Mark every empty box done">All ✓</button>
+              <button class="btn tiny" data-action="hw-clear" data-col="${col.id}" title="Clear every box in this column">Clear</button>
+            </span>
           </th>`)}
           <th scope="col" class="sum-col">Done</th>
         </tr></thead>
@@ -1844,7 +1857,7 @@ function setupPanel(c) {
             <label>Year <input name="year" maxlength="20" value="${c.cls.year}"></label>
           </div>
           <div class="row2">
-            <label>Teacher name <input name="teacher" maxlength="80" value="${c.cls.teacher || ''}" placeholder="Mr Cedillo"></label>
+            <label>Teacher name <input name="teacher" maxlength="80" value="${c.cls.teacher || ''}" placeholder="Your name"></label>
             <label>Contact <input name="contact" maxlength="200" value="${c.cls.contact || ''}" placeholder="Your school email"></label>
           </div>
           <label>About this class <span class="optional">(shown on the Home tab)</span>
@@ -2119,6 +2132,14 @@ $app.addEventListener('click', async (ev) => {
     todo.forEach((s) => { ((c.marks[s.id] ||= {}).h ||= {})[colId] = true; });
     renderPanel();
     await saving(Promise.all(todo.map((s) => store.setMark(c.id, s.id, 'h', colId, true))), `Marked ${plural(todo.length, 'student')} done`);
+  } else if (action === 'hw-clear') {
+    const colId = btn.dataset.col;
+    const marked = c.students.filter((s) => ((c.marks[s.id] || {}).h || {})[colId] !== undefined);
+    if (!marked.length) { toast('This column is already clear.'); return; }
+    if (!confirm(`Clear every box in this column? ${marked.length} ${marked.length === 1 ? 'is' : 'are'} marked now.`)) return;
+    marked.forEach((s) => { delete c.marks[s.id].h[colId]; });
+    renderPanel();
+    await saving(Promise.all(marked.map((s) => store.setMark(c.id, s.id, 'h', colId, null))), 'Column cleared');
   } else if (action === 'delete-extra') {
     const x = c.tracker.extra.find((e) => e.id === btn.dataset.col);
     if (!x || !confirm(`Remove the column "${x.title}"? Its marks are kept in case you add it back, but won't show anywhere.`)) return;
