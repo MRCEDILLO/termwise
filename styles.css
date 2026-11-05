@@ -414,7 +414,8 @@ kbd { font: 700 .8rem var(--font-head); border: 1px solid var(--line-2); border-
 .opt.off .opt-label { font-weight: 400; }
 
 /* ---------- lessons tab: library sidebar and lesson builder ---------- */
-.library { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; align-items: start; }
+/* The sidebar takes about a third of the row (300-440px) so unit and lesson titles have room. */
+.library { display: grid; grid-template-columns: clamp(300px, 36%, 440px) minmax(0, 1fr); gap: 20px; align-items: start; }
 .lib-side {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
   padding: 12px; position: sticky; top: 76px; max-height: calc(100vh - 88px); overflow-y: auto;
