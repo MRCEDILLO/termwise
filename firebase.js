@@ -342,6 +342,30 @@ export function createFirebaseStore(config) {
       return this.copyInto(fromId, toId, copy, onProgress);
     },
 
+    // Another teacher's class, found by its class key, to copy into a new class. Records the key
+    // under classes/{id}/importers/{me}, which is what lets this teacher read that class's units,
+    // lessons and files (firestore.rules, storage.rules); endImport removes it after the copy.
+    // Returns { classId, name, own } (own: it's one of this teacher's own classes), or null when
+    // no open class has that key.
+    async startImport(key) {
+      const me = auth.currentUser;
+      const keySnap = await orNull(getDoc(doc(db, 'joinKeys', key)));
+      if (!keySnap || !keySnap.exists()) return null;
+      const { classId, owner } = keySnap.data();
+      if (owner === me.uid) {
+        const own = await orNull(getDoc(doc(db, 'classes', classId)));
+        return own && own.exists() ? { classId, name: own.data().name, own: true } : null;
+      }
+      const ok = await orNull(setDoc(doc(db, 'classes', classId, 'importers', me.uid), { key, at: Date.now() }));
+      if (ok === null) return null;
+      const cls = await orNull(getDoc(doc(db, 'classes', classId)));
+      return { classId, name: cls && cls.exists() ? cls.data().name : '', own: false };
+    },
+
+    async endImport(classId) {
+      await deleteDoc(doc(db, 'classes', classId, 'importers', auth.currentUser.uid)).catch((e) => console.error(e));
+    },
+
     // A fresh id in the class for a 'unit', 'lesson' or 'file'.
     newId(classId, kind) {
       return doc(collection(db, 'classes', classId, `${kind}s`)).id;

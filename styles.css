@@ -97,6 +97,7 @@ input, select, textarea, button { font: inherit; color: inherit; }
 
 /* ---------- forms ---------- */
 label { display: block; font-weight: 700; font-size: .92rem; color: var(--ink-2); }
+label[hidden] { display: none; }
 input:not([type=checkbox]):not([type=radio]), select, textarea {
   display: block; width: 100%; margin-top: 4px;
   padding: 9px 12px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--surface);
