@@ -5,7 +5,7 @@ import {
   initializeTestEnvironment, assertSucceeds, assertFails,
 } from '@firebase/rules-unit-testing';
 import { doc, setDoc, updateDoc, deleteDoc, Timestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getMetadata, deleteObject } from 'firebase/storage';
+import { ref, uploadBytes, getMetadata, updateMetadata, deleteObject } from 'firebase/storage';
 
 let env;
 const KEY = 'K7QA4MXB';
@@ -24,6 +24,17 @@ after(() => env.cleanup());
 
 const hour = 3600 * 1000;
 const file = (extra) => ({ lessonId: 'l1', name: 'notes.pdf', size: 4, type: PDF, locked: false, unlocked: false, unlockAt: null, ...extra });
+// The lock settings as the app writes them onto the stored file (firebase.js accessMeta).
+const access = ({ locked = false, unlocked = false, unlockAt = null } = {}) => ({
+  locked: String(locked), unlocked: String(unlocked), unlockAt: unlockAt == null ? '' : String(unlockAt),
+});
+const settings = {
+  open: {},
+  answers: { locked: true },
+  past: { locked: true, unlockAt: Date.now() - hour },
+  future: { locked: true, unlockAt: Date.now() + 24 * hour },
+  switched: { locked: true, unlocked: true, unlockAt: Date.now() + 24 * hour },
+};
 
 beforeEach(async () => {
   await env.clearFirestore();
@@ -40,9 +51,12 @@ beforeEach(async () => {
     await setDoc(doc(db, 'classes/c1/files/future'), file({ locked: true, unlockAt: Timestamp.fromMillis(Date.now() + 24 * hour) }));
     await setDoc(doc(db, 'classes/c1/files/switched'), file({ locked: true, unlocked: true, unlockAt: Timestamp.fromMillis(Date.now() + 24 * hour) }));
     const st = ctx.storage();
-    for (const id of ['open', 'answers', 'past', 'future', 'switched']) {
-      await uploadBytes(ref(st, path(id)), bytes, { contentType: PDF });
+    for (const [id, a] of Object.entries(settings)) {
+      await uploadBytes(ref(st, path(id)), bytes, { contentType: PDF, customMetadata: access(a) });
     }
+    // Uploaded before the lock settings were copied onto files.
+    await setDoc(doc(db, 'classes/c1/files/legacy'), file());
+    await uploadBytes(ref(st, path('legacy')), bytes, { contentType: PDF });
   });
 });
 
@@ -66,8 +80,26 @@ test('teacher-only files stay shut for students until their date or the switch',
 
 test('flipping the switch opens a teacher-only file straight away', async () => {
   await assertFails(canRead(student('s1'), 'answers'));
-  await assertSucceeds(updateDoc(doc(teacher('gabe').firestore(), 'classes/c1/files/answers'), { unlocked: true }));
+  await assertSucceeds(updateMetadata(ref(teacher('gabe').storage(), path('answers')), { customMetadata: access({ locked: true, unlocked: true }) }));
   await assertSucceeds(canRead(student('s1'), 'answers'));
+});
+
+// Firebase lets Storage rules look at only two Firestore documents per request (the emulator
+// doesn't enforce this). The student check must use just the class and the membership.
+test('students open files without the rules reading the file record', async () => {
+  await env.withSecurityRulesDisabled((ctx) => deleteDoc(doc(ctx.firestore(), 'classes/c1/files/open')));
+  await assertSucceeds(canRead(student('s1'), 'open'));
+});
+
+test('a file without lock settings stays shut for students until the teacher adds them', async () => {
+  await assertFails(canRead(student('s1'), 'legacy'));
+  await assertSucceeds(canRead(teacher('gabe'), 'legacy'));
+  await assertSucceeds(updateMetadata(ref(teacher('gabe').storage(), path('legacy')), { customMetadata: access() }));
+  await assertSucceeds(canRead(student('s1'), 'legacy'));
+});
+
+test('students cannot change lock settings', async () => {
+  await assertFails(updateMetadata(ref(student('s1').storage(), path('answers')), { customMetadata: access() }));
 });
 
 test('the teacher opens every file, locked or not', async () => {

@@ -2,7 +2,8 @@ rules_version = '2';
 
 // Termwise Storage rules: lesson files.
 // Files live at classes/{classId}/files/{fileId}/{name}. Their record in Firestore
-// (classes/{classId}/files/{fileId}) says whether the file is teacher-only and when it unlocks.
+// (classes/{classId}/files/{fileId}) says whether the file is teacher-only and when it unlocks,
+// and the app copies those settings onto the file's custom metadata, which is what these rules read.
 // Only the class's teacher (while still on the admin's list) can upload or delete. Students who joined with the current key can
 // read a file once it is open: not teacher-only, switched on, or past its unlock date.
 service firebase.storage {
@@ -32,9 +33,17 @@ service firebase.storage {
         && firestore.exists(m) && firestore.get(m).data.key == c.currentKey;
     }
 
-    function isOpen(classId, fileId) {
-      let f = firestore.get(/databases/(default)/documents/classes/$(classId)/files/$(fileId)).data;
-      return f.locked == false || f.unlocked == true || (f.unlockAt != null && request.time >= f.unlockAt);
+    // Is the file open to students? The lock settings are read from the file's own metadata
+    // (written by the app alongside the Firestore record), not from Firestore: Storage rules may
+    // look at no more than two Firestore documents per request, and isMember already uses two
+    // (the class and the student's membership). A third lookup makes Firebase refuse every
+    // student. A file with no settings on it counts as locked until the teacher's app adds them.
+    function isOpen() {
+      let md = resource.metadata == null ? {} : resource.metadata;
+      let unlockAt = md.get('unlockAt', '');
+      return md.get('locked', 'true') == 'false'
+        || md.get('unlocked', 'false') == 'true'
+        || (unlockAt.matches('^[0-9]+$') && request.time.toMillis() >= int(unlockAt));
     }
 
     // PDF, PowerPoint, Word and common pictures, up to 50 MB (see files.js).
@@ -44,7 +53,7 @@ service firebase.storage {
     }
 
     match /classes/{classId}/files/{fileId}/{fileName} {
-      allow read: if isOwner(classId) || (isMember(classId) && isOpen(classId, fileId));
+      allow read: if isOwner(classId) || (isMember(classId) && isOpen());
       allow create, update: if isOwner(classId) && allowedUpload();
       allow delete: if isOwner(classId);
     }

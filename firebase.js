@@ -10,7 +10,7 @@ import {
   writeBatch, query, where, orderBy, limit, serverTimestamp, Timestamp, deleteField,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import {
-  getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject,
+  getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject, getMetadata, updateMetadata,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js';
 import { FILE_TYPES, fileExt, storageName } from './files.js';
 import { newKey } from './keys.js';
@@ -27,6 +27,13 @@ export function createFirebaseStore(config) {
     const data = d.data();
     return { id: d.id, ...data, unlockAt: data.unlockAt ? data.unlockAt.toMillis() : null };
   };
+  // The lock settings are also written onto the stored file (custom metadata), because the
+  // Storage rules may only look at two Firestore documents per request and the membership
+  // check already uses both (see storage.rules). The Firestore record stays the one the app reads.
+  const accessMeta = (f) => ({
+    locked: String(!!f.locked), unlocked: String(!!f.unlocked), unlockAt: f.unlockAt == null ? '' : String(f.unlockAt),
+  });
+  const sameAccess = (a = {}, b) => Object.keys(b).every((k) => a[k] === b[k]);
 
   const toUser = (u) => u && {
     uid: u.uid,
@@ -249,7 +256,9 @@ export function createFirebaseStore(config) {
       const recRef = doc(db, 'classes', classId, 'files', id);
       await setDoc(recRef, meta);
       try {
-        const task = uploadBytesResumable(fileRef(classId, { id, name: meta.name }), file, { contentType: meta.type });
+        const task = uploadBytesResumable(fileRef(classId, { id, name: meta.name }), file, {
+          contentType: meta.type, customMetadata: accessMeta(meta),
+        });
         task.on('state_changed', (s) => onProgress(s.bytesTransferred / s.totalBytes));
         await task;
       } catch (e) {
@@ -259,10 +268,28 @@ export function createFirebaseStore(config) {
       return { id, ...meta, createdAt: Date.now() };
     },
 
-    updateFile(classId, fileId, patch) {
+    // f is the file with the patch already applied.
+    async updateFile(classId, f, patch) {
       const p = { ...patch };
       if ('unlockAt' in p) p.unlockAt = p.unlockAt == null ? null : Timestamp.fromMillis(p.unlockAt);
-      return updateDoc(doc(db, 'classes', classId, 'files', fileId), p);
+      await Promise.all([
+        updateDoc(doc(db, 'classes', classId, 'files', f.id), p),
+        updateMetadata(fileRef(classId, f), { customMetadata: accessMeta(f) }),
+      ]);
+    },
+
+    // Teacher only: copy each file's lock settings onto the stored file where they differ.
+    // Fixes files uploaded before the settings were copied there, which students couldn't open.
+    async syncFileAccess(classId, files) {
+      await Promise.all(files.map(async (f) => {
+        const want = accessMeta(f);
+        const r = fileRef(classId, f);
+        const have = await getMetadata(r).catch((e) => {
+          if (e.code === 'storage/object-not-found') return null;
+          throw e;
+        });
+        if (have && !sameAccess(have.customMetadata, want)) await updateMetadata(r, { customMetadata: want });
+      }));
     },
 
     async deleteFile(classId, f) {
