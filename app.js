@@ -370,7 +370,7 @@ async function showClass(id, tab, sub = '') {
     // Lessons saved before terms were chosen are Term 1; a null term means "not on the planner".
     lessons.forEach((l) => { if (l.term === undefined) l.term = 1; });
     state.cls = {
-      id, cls, plan, lessons, units, files, posts, uploads: [], collapsed: new Set(), isOwner,
+      id, cls, plan, lessons, units, files, posts, uploads: [], expanded: new Set(), isOwner,
       students, marks, tracker: { ...emptyTracker(), ...(tracker || {}) },
     };
     sortLessons(state.cls);
@@ -393,6 +393,8 @@ async function showClass(id, tab, sub = '') {
   const lessonId = tab === 'lessons' && sub && c.lessons.some((l) => l.id === sub) ? sub : null;
   if (lessonId !== c.lessonId) c.preview = false;
   if (tab !== c.tab || sub !== c.sub) c.scaleDraft = null;
+  // Coming into the Lessons tab starts with every unit folded, so the whole list fits at a glance.
+  if (tab === 'lessons' && c.tab !== 'lessons') { c.expanded.clear(); c.autoOpened = null; }
   c.tab = tab;
   c.sub = sub;
   c.lessonId = lessonId;
@@ -834,6 +836,13 @@ function libraryPanel(c) {
     ...c.units.map((u) => ({ unit: u, lessons: libLessons(c, u.id) })),
     { unit: null, lessons: libLessons(c, null) },
   ].filter((g) => (g.unit && (c.isOwner || g.lessons.length)) || (!g.unit && g.lessons.length));
+  // Units stay folded until opened, except the one holding the lesson being viewed, which opens once
+  // (when that lesson is picked or moves unit) and can then be folded again by hand.
+  if (sel) {
+    const g = groups.find((x) => x.lessons.some((l) => l.id === sel.id));
+    const key = g && `${sel.id}|${g.unit ? g.unit.id : ''}`;
+    if (g && c.autoOpened !== key) { c.autoOpened = key; c.expanded.add(g.unit ? g.unit.id : ''); }
+  }
   const whenShort = (l) => {
     const p = c.placed.get(l.id);
     if (p && p.start) return `T${p.start.term} Wk ${p.start.week}`;
@@ -861,7 +870,7 @@ function libraryPanel(c) {
         const id = g.unit ? g.unit.id : '';
         const name = g.unit ? g.unit.name : 'No unit';
         const editing = g.unit && c.editingUnit === id;
-        const open = !c.collapsed.has(id) || g.lessons.some((l) => l.id === c.lessonId);
+        const open = c.expanded.has(id);
         return html`
           <section class="lib-unit" data-unit="${id}" data-name="${name.toLowerCase()}" style="--unit:${unitColour(c, g.unit && id)}">
             ${editing ? html`
@@ -873,7 +882,7 @@ function libraryPanel(c) {
               </form>` : html`
               <div class="lib-unit-head">
                 ${g.unit ? grip('unit', id, `the unit ${name}`) : ''}
-                <h3><button class="lib-toggle" data-action="toggle-unit" data-unit="${id}" aria-expanded="${open}">${name}</button></h3>
+                <h3><button class="lib-toggle" data-action="toggle-unit" data-unit="${id}" aria-expanded="${String(open)}">${name}</button></h3>
                 <span class="lib-count" aria-label="${plural(g.lessons.length, 'lesson')}">${g.lessons.length}</span>
                 ${c.isOwner && g.unit ? html`
                   <button class="icon-btn" data-action="new-lesson" data-unit="${id}" aria-label="New lesson in ${name}" title="New lesson in this unit">+</button>
@@ -2090,8 +2099,8 @@ $app.addEventListener('click', async (ev) => {
     renderPanel();
   } else if (action === 'toggle-unit') {
     const id = btn.dataset.unit;
-    if (c.collapsed.has(id)) c.collapsed.delete(id); else c.collapsed.add(id);
-    btn.setAttribute('aria-expanded', String(!c.collapsed.has(id)));
+    if (c.expanded.has(id)) c.expanded.delete(id); else c.expanded.add(id);
+    btn.setAttribute('aria-expanded', String(c.expanded.has(id)));
     applyLibFilter();
   } else if (action === 'new-unit') {
     c.addingUnit = true;
