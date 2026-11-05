@@ -430,6 +430,30 @@ kbd { font: 700 .8rem var(--font-head); border: 1px solid var(--line-2); border-
 .lib-lessons a.on { background: var(--primary-soft); color: var(--primary); font-weight: 700; }
 .lib-lessons a.unplaced .lib-title { color: var(--ink-2); font-style: italic; }
 .lib-title { min-width: 0; overflow-wrap: anywhere; }
+
+/* Drag to reorder (teacher only). The grip is the only handle, so a finger elsewhere still scrolls. */
+.lib-lessons li { display: flex; align-items: center; gap: 0; }
+.lib-lessons li > a { flex: 1 1 auto; min-width: 0; }
+.lib-grip {
+  flex: none; display: grid; place-items: center; width: 26px; min-height: 32px; padding: 0 0 0 1px; margin-left: -4px;
+  border: 0; border-radius: 6px; background: none; color: var(--line-2); font: 800 .9rem/1 var(--font-body); letter-spacing: -3px;
+  cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.lib-lessons li:hover .lib-grip, .lib-unit-head:hover .lib-grip { color: var(--ink-3); }
+.lib-grip:hover, .lib-grip:focus-visible { background: #F0F3F8; color: var(--ink-2); }
+.lib-unit-head .lib-grip { margin-left: -6px; }
+.lib-side.filtering .lib-grip { display: none; }
+.lib-drag-src { opacity: .35; }
+.lib-side.sorting-units .lib-lessons, .lib-side.sorting-units .lib-empty { display: none; }
+.lib-unit.drop-into .lib-unit-head { background: var(--primary-soft); }
+.lib-ghost {
+  position: fixed; z-index: 1000; margin: 0; list-style: none; pointer-events: none;
+  background: var(--surface); border-radius: 8px; box-shadow: 0 6px 20px rgba(27, 34, 50, .18);
+  transform: rotate(-1deg);
+}
+.lib-ghost.lib-unit-head { background: var(--surface); }
+body.lib-dragging, body.lib-dragging * { cursor: grabbing !important; user-select: none; -webkit-user-select: none; }
+@media (pointer: coarse) { .lib-grip { width: 36px; min-height: 40px; color: var(--ink-3); } }
 .lib-when { flex: none; font-size: .75rem; color: var(--ink-3); white-space: nowrap; }
 .lib-empty { color: var(--ink-3); font-size: .88rem; padding: 4px 14px; margin: 0; }
 .lib-main { min-width: 0; }
