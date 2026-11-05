@@ -503,7 +503,8 @@ label.inline select { width: auto; margin: 0; padding: 6px 10px; }
 .preview-note { background: var(--warn-soft); padding: 8px 12px; border-radius: 8px; font-size: .9rem; }
 
 /* ---------- home ---------- */
-.home-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; align-items: start; }
+/* Class info and This week take about two fifths of the row (340-480px); announcements get the rest. */
+.home-grid { display: grid; grid-template-columns: minmax(0, 1fr) clamp(340px, 40%, 480px); gap: 24px; align-items: start; }
 .home-feed { display: grid; gap: 14px; min-width: 0; }
 .feed-head { margin: 6px 0 0; }
 .post-form { display: grid; gap: 10px; }
