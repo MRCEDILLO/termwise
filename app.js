@@ -84,7 +84,11 @@ async function saving(promise, ok = 'Saved') {
     return true;
   } catch (e) {
     console.error(e);
-    toast("Couldn't save. Check your connection and try again.", 'error');
+    // A refusal from the security rules usually means the rules published in the
+    // Firebase console are older than firestore.rules in this repo.
+    toast(e && e.code === 'permission-denied'
+      ? "Couldn't save: Firebase refused it. Republish firestore.rules in the Firebase console."
+      : "Couldn't save. Check your connection and try again.", 'error');
     return false;
   }
 }
