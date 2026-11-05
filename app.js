@@ -27,6 +27,8 @@ const syncedFiles = new Set();
 export const CLASS_COLOURS = [
   '#1F6FD1', '#0D8466', '#C2410C', '#7C3AED', '#BE185D', '#0E7490', '#4D7C0F', '#A16207',
   '#1E3A8A', '#B91C1C', '#166534', '#4338CA', '#86198F', '#475569', '#7C2D12', '#0F766E',
+  // Added later: new colours go on the end so saved choices keep their colour.
+  '#0369A1', '#047857', '#E11D48', '#6B21A8', '#B45309', '#7E5A9B', '#4F7A5A', '#1F2937',
 ];
 const colourOf = (c) => CLASS_COLOURS[(Number(c && c.colour) || 0) % CLASS_COLOURS.length];
 
@@ -50,6 +52,8 @@ function html(strings, ...vals) {
 // Assessment (★, red) and revision (↻, violet) markers. lessonKind gives 'assess', 'revise' or ''.
 const KINDS = { assess: { mark: '★', label: 'Assessment' }, revise: { mark: '↻', label: 'Revision' } };
 const kindMark = (l) => { const k = KINDS[lessonKind(l)]; return k ? `${k.mark} ` : ''; };
+// Line-style paperclip that marks lessons with files; it takes the text colour.
+const CLIP_ICON = raw('<svg class="clip-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>');
 const kindIcon = (kind) => (KINDS[kind] ? html`<span class="mark ${kind}" aria-label="${KINDS[kind].label}">${KINDS[kind].mark}</span> ` : '');
 const kindTag = (l) => { const kind = lessonKind(l); return KINDS[kind] ? html`<span class="tag ${kind}-tag">${KINDS[kind].mark} ${KINDS[kind].label}</span>` : ''; };
 const show = (el, content) => { el.innerHTML = String(content); };
@@ -699,7 +703,7 @@ function plannerPanel(c) {
             ${when ? html`<span class="when">${when}</span>` : ''}
             ${statusText(l) ? html`<span class="tag ${l.status === 'skipped' ? '' : 'bad'}">${statusText(l)}</span>` : ''}
             ${kindTag(l)}
-            ${nFiles ? html`<span class="file-count" title="${plural(nFiles, 'file')}">📎 ${nFiles}</span>` : ''}
+            ${nFiles ? html`<span class="file-count" title="${plural(nFiles, 'file')}">${CLIP_ICON}${nFiles}</span>` : ''}
           </div>
         </div>
         <label class="periods">Periods
@@ -1201,7 +1205,7 @@ function weekCalendar(c) {
         <span class="tile-title">${kindIcon(k)}${l.title}</span>
         ${part ? html`<span class="tile-part">${part}</span>` : ''}
         ${l.homework ? html`<span class="tag">Homework</span>` : ''}
-        ${nFiles ? html`<span class="tile-files">📎 ${plural(nFiles, 'file')}</span>` : ''}
+        ${nFiles ? html`<span class="tile-files">${CLIP_ICON}${plural(nFiles, 'file')}</span>` : ''}
       </a>`);
       p += span - 1;
     }
