@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  schedule, emptyPlan, currentWeek, cellText, isAssessmentLike, termMonday, slotDate,
+  schedule, emptyPlan, currentWeek, cellText, isAssessmentLike, isRevisionLike, lessonKind, termMonday, slotDate,
 } from '../planner.js';
 
 // Mon P1, Wed P3, Fri P5: 3 meetings a week.
@@ -111,11 +111,22 @@ test('weeks are capped at 20 and the pattern ignores bad keys', () => {
 });
 
 test('auto-tint words match the spreadsheet', () => {
-  for (const t of ['Unit test', 'Exam prep', 'Quiz 2', 'Revision', 'Review', 'SAC Assessment']) {
+  for (const t of ['Unit test', 'Exam prep', 'Quiz 2', 'SAC Assessment']) {
     assert.equal(isAssessmentLike({ title: t }), true, t);
   }
   assert.equal(isAssessmentLike({ title: 'Fractions' }), false);
   assert.equal(isAssessmentLike({ title: 'Fractions', assessment: true }), true);
+});
+
+test('revision and review lessons are their own kind, not assessments', () => {
+  for (const t of ['Revision', 'Review', 'Test revision', 'Exam review', 'Unit 3 REVIEW']) {
+    assert.equal(lessonKind({ title: t }), 'revise', t);
+    assert.equal(isRevisionLike({ title: t }), true, t);
+    assert.equal(isAssessmentLike({ title: t }), false, t);
+  }
+  // Ticking Assessment still makes it an assessment.
+  assert.equal(lessonKind({ title: 'Revision', assessment: true }), 'assess');
+  assert.equal(lessonKind({ title: 'Fractions' }), '');
 });
 
 test('current week from today\'s date', () => {

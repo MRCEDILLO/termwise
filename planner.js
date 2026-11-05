@@ -17,7 +17,8 @@ export const PERIODS_PER_DAY = 6;
 export const MAX_WEEKS = 20;
 export const TERM_COUNT = 4;
 
-const ASSESSMENT_WORDS = /assessment|exam|test|quiz|revision|review/i;
+const ASSESSMENT_WORDS = /assessment|exam|test|quiz/i;
+const REVISION_WORDS = /revision|review/i;
 
 /* ---------- small helpers ---------- */
 
@@ -29,9 +30,23 @@ export function emptyPlan() {
   };
 }
 
-// Same rule as the spreadsheet's red tint, plus the lesson's own assessment flag.
+// 'assess', 'revise' or ''. Ticking Assessment always wins. Otherwise a title with
+// "revision" or "review" is a revision lesson (so "Test revision" is revision, not a test),
+// and a title with assessment, exam, test or quiz is an assessment.
+export function lessonKind(lesson) {
+  if (!lesson) return '';
+  if (lesson.assessment) return 'assess';
+  const title = lesson.title || '';
+  if (REVISION_WORDS.test(title)) return 'revise';
+  return ASSESSMENT_WORDS.test(title) ? 'assess' : '';
+}
+
 export function isAssessmentLike(lesson) {
-  return !!(lesson && (lesson.assessment || ASSESSMENT_WORDS.test(lesson.title || '')));
+  return lessonKind(lesson) === 'assess';
+}
+
+export function isRevisionLike(lesson) {
+  return lessonKind(lesson) === 'revise';
 }
 
 // The term a lesson is taught in (1..4). Lessons saved before terms were chosen count as Term 1.
