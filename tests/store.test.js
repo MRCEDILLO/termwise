@@ -5,6 +5,7 @@
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { copyToClass } from '../template.js';
 import { initializeTestEnvironment } from '@firebase/rules-unit-testing';
 import { doc, setDoc } from 'firebase/firestore';
 
@@ -242,6 +243,84 @@ test('a new class copies lessons, units, planner placement and files from a temp
   assert.deepEqual(await teacher.getAnnouncements(id), []);
   assert.deepEqual((await teacher.getPlan(id)).pattern, []);
   assert.equal(open.name, 'Sheet.pdf');
+});
+
+// Waits until onChange has been called with a kind and data that pass the check.
+function waitFor(events, check, ms = 8000) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('timed out waiting for a live update')), ms);
+    const tick = () => {
+      const hit = events.find(check);
+      if (hit) { clearTimeout(t); resolve(hit); } else setTimeout(tick, 50);
+    };
+    tick();
+  });
+}
+
+test('a student sees changes live, and is told when the key changes', async () => {
+  const run = Date.now();
+  const teacher = createFirebaseStore(config(`tw${run}`, { sub: `tw${run}`, email: 'gabe@example.com', email_verified: true, name: 'Gabe' }));
+  await teacher.signInTeacher();
+  await waitForUser(teacher);
+  const id = await teacher.createClass({ name: '8C Maths', subject: 'Maths', year: '2027', colour: 0 });
+  const student = createFirebaseStore(config(`sw${run}`));
+  assert.equal(await student.joinWithKey((await teacher.getClass(id)).currentKey), id);
+
+  const events = [];
+  const stop = student.watchClass(id, (kind, data) => events.push([kind, data]));
+  await waitFor(events, ([k]) => k === 'class');
+  await teacher.addAnnouncement(id, 'Test moved to Friday');
+  await waitFor(events, ([k, d]) => k === 'posts' && d.some((p) => p.text === 'Test moved to Friday'));
+  const l = { id: teacher.newLessonId(id), title: 'Live lesson', periods: 1, order: 0, term: 1, assessment: false, homework: false };
+  await teacher.saveLesson(id, l);
+  await waitFor(events, ([k, d]) => k === 'lessons' && d.some((x) => x.title === 'Live lesson'));
+
+  // The teacher's own listener skips snapshots of its unsaved writes, so it never sees a half-made change.
+  const mine = [];
+  const stopMine = teacher.watchClass(id, (kind, data) => mine.push([kind, data]));
+  await waitFor(mine, ([k]) => k === 'lessons');
+  await teacher.saveLesson(id, { ...l, title: 'Renamed' });
+  await waitFor(mine, ([k, d]) => k === 'lessons' && d.some((x) => x.title === 'Renamed'));
+  stopMine();
+
+  await teacher.regenerateKey(id);
+  await waitFor(events, ([k]) => k === 'gone');
+  stop();
+});
+
+test('copying a unit into another class brings its lessons and files', async () => {
+  const run = Date.now();
+  const teacher = createFirebaseStore(config(`tc${run}`, { sub: `tc${run}`, email: 'gabe@example.com', email_verified: true, name: 'Gabe' }));
+  await teacher.signInTeacher();
+  await waitForUser(teacher);
+  const a = await teacher.createClass({ name: '9A Maths', subject: 'Maths', year: '2027', colour: 0 });
+  const b = await teacher.createClass({ name: '9B Maths', subject: 'Maths', year: '2027', colour: 1 });
+  const unit = { id: teacher.newUnitId(a), name: 'Algebra', order: 0, colour: 2 };
+  await teacher.saveUnit(a, unit);
+  const l1 = { id: teacher.newLessonId(a), title: 'Expanding', unitId: unit.id, periods: 2, term: 1, order: 0, libOrder: 0, assessment: false, homework: true, openAfter: true };
+  await teacher.saveLesson(a, l1);
+  const pdf = (name) => new File([new Uint8Array([37, 80, 68, 70])], name);
+  await teacher.uploadFile(a, l1.id, pdf('Answers.pdf'), { locked: true });
+  const existing = { id: teacher.newLessonId(b), title: 'Already here', periods: 1, term: 1, order: 4, assessment: false, homework: false };
+  await teacher.saveLesson(b, existing);
+
+  const copy = copyToClass(
+    { unit, lessons: [l1], files: await teacher.listFiles(a) },
+    { units: await teacher.getUnits(b), lessons: await teacher.getLessons(b) },
+    (kind) => teacher.newId(b, kind),
+    { onPlanner: true },
+  );
+  const res = await teacher.copyInto(a, b, copy);
+  assert.deepEqual(res, { units: 1, lessons: 1, files: 1, failed: [] });
+  const [u] = await teacher.getUnits(b);
+  assert.equal(u.name, 'Algebra');
+  const lessons = await teacher.getLessons(b);
+  assert.deepEqual(lessons.map((l) => [l.title, l.term, l.order, l.unitId === u.id]), [['Already here', 1, 4, false], ['Expanding', 1, 5, true]]);
+  assert.equal(lessons[1].openAfter, true);
+  const [f] = await teacher.listFiles(b);
+  assert.deepEqual([f.name, f.locked, f.lessonId], ['Answers.pdf', true, lessons[1].id]);
+  assert.ok(await teacher.fileUrl(b, f), 'the copied file is really there');
+  assert.equal((await teacher.getLessons(a)).length, 1, 'the first class is unchanged');
 });
 
 test('a Google account the admin has not added cannot make a class', async () => {

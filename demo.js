@@ -329,12 +329,33 @@ export function createDemoStore() {
       const copy = templateCopy({
         units: data.units[fromId] || [], lessons: data.lessons[fromId] || [], files: demoFiles[fromId] || [],
       }, () => uid());
-      data.units[toId] = structuredClone(copy.units);
-      data.lessons[toId] = structuredClone(copy.lessons);
-      demoFiles[toId] = copy.files.map(({ from, ...f }) => ({ ...f, createdAt: Date.now(), blob: from.blob }));
+      return this.copyInto(fromId, toId, copy, onProgress);
+    },
+    newId() { return uid(); },
+    async copyInto(fromId, toId, copy, onProgress = () => {}) {
+      (data.units[toId] ||= []).push(...structuredClone(copy.units));
+      (data.lessons[toId] ||= []).push(...structuredClone(copy.lessons));
+      (demoFiles[toId] ||= []).push(...copy.files.map(({ from, ...f }) => ({ ...f, createdAt: Date.now(), blob: from.blob })));
       onProgress(copy.files.length, copy.files.length);
       persist();
       return { units: copy.units.length, lessons: copy.lessons.length, files: copy.files.length, failed: [] };
+    },
+
+    // Live updates between tabs of this browser: another tab's save shows up here. (Demo files
+    // live in each tab's memory, so they don't travel.)
+    watchClass(id, onChange) {
+      const handler = (ev) => {
+        if (ev.key !== DATA_KEY || !ev.newValue) return;
+        try { data = JSON.parse(ev.newValue); } catch { return; }
+        if (!canRead(id)) { onChange('gone'); return; }
+        onChange('class', { id, ...structuredClone(data.classes[id]) });
+        onChange('plan', structuredClone({ ...emptyPlan(), ...(data.plans[id] || {}) }));
+        onChange('units', structuredClone((data.units[id] || []).slice().sort((a, b) => a.order - b.order)));
+        onChange('lessons', structuredClone((data.lessons[id] || []).slice().sort((a, b) => a.order - b.order)));
+        onChange('posts', structuredClone((data.announcements[id] || []).slice().sort((a, b) => b.createdAt - a.createdAt)));
+      };
+      window.addEventListener('storage', handler);
+      return () => window.removeEventListener('storage', handler);
     },
 
     async joinWithKey(key) {

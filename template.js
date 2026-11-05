@@ -30,6 +30,7 @@ export function templateCopy({ units = [], lessons = [], files = [] }, newId) {
       order: l.order ?? 0,
     };
     if (typeof l.libOrder === 'number') copy.libOrder = l.libOrder;
+    if (l.openAfter) copy.openAfter = true;
     return copy;
   });
 
@@ -48,6 +49,73 @@ export function templateCopy({ units = [], lessons = [], files = [] }, newId) {
   }));
 
   return { units: newUnits, lessons: newLessons, files: newFiles };
+}
+
+// Copying one lesson, or a whole unit, into another of the teacher's classes.
+//   from:   { unit, lessons, files, unitName }  unit is set when a whole unit is copied (lessons are
+//           its lessons, in Lessons-tab order); unitName is the single lesson's unit name, if any
+//   target: { units, lessons }                  what the other class already has
+//   onPlanner: lessons on the planner here go to the end of the same term there; otherwise
+//              (and for lessons not on the planner here) they go in the library only.
+// A copied unit is always a new unit at the end of the list. A single lesson goes into the other
+// class's unit with the same name (ignoring case and spaces), or under No unit if there isn't one.
+// Files come across as in templateCopy: teacher-only files stay teacher-only, locked again.
+export function copyToClass({ unit = null, lessons = [], files = [], unitName = '' }, target, newId, { onPlanner = false } = {}) {
+  const norm = (s) => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const tUnits = target.units || [];
+  const tLessons = target.lessons || [];
+  const maxOf = (list, f) => list.reduce((m, x) => Math.max(m, f(x)), -1);
+  const libKey = (l) => (typeof l.libOrder === 'number' ? l.libOrder : 100000 + (l.order ?? 0));
+
+  let newUnit = null;
+  let unitId = null;
+  if (unit) {
+    newUnit = { id: newId('unit'), name: unit.name || 'Unit', order: maxOf(tUnits, (u) => u.order ?? 0) + 1 };
+    if (typeof unit.colour === 'number') newUnit.colour = unit.colour;
+    unitId = newUnit.id;
+  } else if (norm(unitName)) {
+    const same = tUnits.find((u) => norm(u.name) === norm(unitName));
+    unitId = same ? same.id : null;
+  }
+
+  // Library order follows the list given; planner order follows this class's timeline.
+  const baseOrder = maxOf(tLessons, (l) => l.order ?? 0) + 1;
+  const timeline = [...lessons].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map((l) => l.id);
+  let libOrder = maxOf(tLessons, libKey) + 1;
+  const lessonIds = new Map();
+  const newLessons = lessons.map((l) => {
+    const id = newId('lesson');
+    lessonIds.set(l.id, id);
+    const placed = onPlanner && l.term >= 1 && l.term <= 4;
+    const copy = {
+      id,
+      title: l.title || 'Lesson',
+      description: l.description || '',
+      unitId,
+      periods: l.periods ?? 1,
+      assessment: !!l.assessment,
+      homework: !!l.homework,
+      term: placed ? l.term : null,
+      order: baseOrder + timeline.indexOf(l.id),
+      libOrder: libOrder++,
+    };
+    if (l.openAfter) copy.openAfter = true;
+    return copy;
+  });
+
+  const newFiles = files.filter((f) => lessonIds.has(f.lessonId)).map((f) => ({
+    from: f,
+    id: newId('file'),
+    lessonId: lessonIds.get(f.lessonId),
+    name: f.name,
+    size: f.size,
+    type: f.type,
+    locked: !!f.locked,
+    unlocked: false,
+    unlockAt: null,
+  }));
+
+  return { units: newUnit ? [newUnit] : [], lessons: newLessons, files: newFiles };
 }
 
 // Importing events and blocked time from another class into this one. The other

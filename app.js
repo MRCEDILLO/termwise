@@ -6,14 +6,14 @@ import { createDemoStore } from './demo.js';
 import { normaliseKey, formatKey } from './keys.js';
 import { ACCEPT, fileProblem, isOpen, fileSize, fileIcon } from './files.js';
 import {
-  schedule, emptyPlan, isAssessmentLike, lessonKind, currentWeek, weekRange, slotLabel, cellText, slotDate,
+  schedule, emptyPlan, isAssessmentLike, lessonKind, currentWeek, weekRange, slotLabel, cellText, slotDate, daySessions,
   DAYS, PERIODS_PER_DAY, MAX_WEEKS, TERM_COUNT, clampWeeks,
 } from './planner.js';
 import {
   emptyTracker, defaultScale, manualLevels, trackerColumns, inTerms, parseScore, result, studentSummary,
   assessmentSummary, homeworkSummary, classHomework, parseNames, sortStudents, scaleProblem,
 } from './tracker.js';
-import { importEvents } from './template.js';
+import { importEvents, copyToClass } from './template.js';
 
 const store = FIREBASE_CONFIG.apiKey
   ? (await import('./firebase.js')).createFirebaseStore(FIREBASE_CONFIG)
@@ -112,6 +112,85 @@ function setJoined(list) {
   try { localStorage.setItem(JOINED_KEY, JSON.stringify(list)); } catch { /* storage blocked */ }
 }
 
+/* ---------- live updates ---------- */
+
+// The open class listens for changes saved elsewhere (another device, or the teacher while a
+// student has the page open) and redraws with them. Leaving the class stops listening.
+let unwatch = null;
+function setCls(cls) {
+  if (unwatch) { unwatch(); unwatch = null; }
+  state.cls = cls;
+}
+
+// The same data, whatever order its keys are in. Firestore times compare as milliseconds.
+function canon(v) {
+  if (Array.isArray(v)) return v.map(canon);
+  if (v && typeof v === 'object') {
+    if (typeof v.toMillis === 'function') return v.toMillis();
+    return Object.fromEntries(Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => [k, canon(v[k])]));
+  }
+  return v;
+}
+const same = (a, b) => JSON.stringify(canon(a)) === JSON.stringify(canon(b));
+const byId = (list) => [...list].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+// Leaves out the times the server fills in, which this page only knows roughly.
+const noTimes = (x) => ({ ...x, createdAt: undefined });
+
+function applyRemote(id, kind, data) {
+  const c = state.cls;
+  if (!c || c.id !== id) return;
+  if (kind === 'gone') {
+    if (c.isOwner) return;
+    setCls(null);
+    showUnavailable(id);
+    return;
+  }
+  let changed = false;
+  if (kind === 'class') {
+    if (!same(noTimes(c.cls), noTimes(data))) { c.cls = data; c.fullPending = true; changed = true; }
+  } else if (kind === 'plan') {
+    if (!same(c.plan, data)) { c.plan = data; changed = true; }
+  } else if (kind === 'lessons') {
+    data.forEach((l) => { if (l.term === undefined) l.term = 1; });
+    const next = { lessons: data };
+    sortLessons(next);
+    if (!same(byId(c.lessons), byId(next.lessons))) { c.lessons = next.lessons; changed = true; }
+  } else if (kind === 'units') {
+    if (!same(byId(c.units), byId(data))) { c.units = data; changed = true; }
+  } else if (kind === 'files') {
+    if (!same(byId(c.files).map(noTimes), byId(data).map(noTimes))) { c.files = data; changed = true; }
+  } else if (kind === 'posts') {
+    const brief = (list) => list.map((p) => [p.id, p.text]);
+    if (!same(brief(c.posts), brief(data))) { c.posts = data; changed = true; }
+  }
+  const first = !c.seen.has(kind);
+  c.seen.add(kind);
+  if (!changed) return;
+  if (kind === 'plan' || kind === 'lessons') recompute();
+  // A teacher hears about planning changes from another device (not on first load, when
+  // the listener is only catching up with what was just read).
+  if (c.isOwner && !first && ['plan', 'lessons', 'units'].includes(kind)) toast('Updated with changes from another device');
+  c.renderPending = true;
+  flushRender();
+}
+
+// Redraws are held back while someone is typing in a box, dragging, or has a dialog open.
+function busy() {
+  if (libDrag || dragIds) return true;
+  if (document.querySelector('dialog[open]')) return true;
+  const a = document.activeElement;
+  return !!(a && a.closest && a.closest('#panel') && a.matches('input, textarea, select'));
+}
+function flushRender() {
+  const c = state.cls;
+  if (!c || !(c.renderPending || c.fullPending) || busy()) return;
+  const full = c.fullPending;
+  c.renderPending = false;
+  c.fullPending = false;
+  if (full) showClass(c.id, c.tab, c.sub); else renderPanel();
+}
+setInterval(flushRender, 1000);
+
 /* ---------- page frame ---------- */
 
 function frame(body, { wide = false } = {}) {
@@ -154,7 +233,7 @@ async function route() {
     return;
   }
   if (r.page === 'class') return showClass(r.id, r.tab, r.sub);
-  state.cls = null;
+  setCls(null);
   if (!state.user) return showLanding();
   return state.user.isTeacher ? showTeacherHome() : showStudentHome();
 }
@@ -202,7 +281,7 @@ function showLanding() {
 
 // A Google account the admin hasn't added. The rules refuse it everything a teacher can do.
 function showNotAllowed() {
-  state.cls = null;
+  setCls(null);
   show($app, frame(html`
     <section class="card narrow">
       <h1>You're not on the teacher list yet</h1>
@@ -214,7 +293,7 @@ function showNotAllowed() {
 
 // Admin only: the Google emails allowed to sign in as teachers.
 async function showTeachers() {
-  state.cls = null;
+  setCls(null);
   show($app, frame(html`<div class="loading">Loading the teacher list…</div>`));
   let list = [];
   try { list = await store.listAllowedTeachers(); } catch (e) { console.error(e); toast("Couldn't load the teacher list.", 'error'); }
@@ -246,7 +325,10 @@ async function showTeacherHome() {
   let classes = [];
   try { classes = await store.listMyClasses(); } catch (e) { console.error(e); toast("Couldn't load your classes.", 'error'); }
   classes.sort((a, b) => (a.archived - b.archived) || a.name.localeCompare(b.name));
+  const live = classes.filter((c) => !c.archived);
+  state.today = null;
   show($app, frame(html`
+    ${live.length ? html`<section class="today" id="today" aria-label="Your lessons today"><p class="loading small">Loading today's lessons…</p></section>` : ''}
     <div class="page-head">
       <h1>Your classes</h1>
       <button class="btn primary" data-action="new-class">New class</button>
@@ -265,6 +347,88 @@ async function showTeacherHome() {
         </a>`)}
     </div>
     ${newClassDialog(classes)}`, { wide: true }));
+  if (live.length) loadToday(live);
+}
+
+/* ---------- today: every class's lessons for today and the next school day ---------- */
+
+// Today and the next school day (Monday after a Friday). At the weekend: Monday and Tuesday.
+function teachingDays(today = todayISO()) {
+  const step = (d) => {
+    const x = new Date(d);
+    do x.setDate(x.getDate() + 1); while (x.getDay() === 0 || x.getDay() === 6);
+    return x;
+  };
+  const t = new Date(`${today}T00:00:00`);
+  const first = t.getDay() === 0 || t.getDay() === 6 ? step(t) : t;
+  return [first, step(first)].map((d) => msToISO(d.getTime()));
+}
+
+function dayHeading(iso, today = todayISO()) {
+  if (iso === today) return 'Today';
+  const tomorrow = new Date(`${today}T00:00:00`);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return iso === msToISO(tomorrow.getTime()) ? 'Tomorrow' : fmt(iso, { weekday: 'long' });
+}
+
+async function loadToday(classes) {
+  const data = await Promise.all(classes.map(async (cls) => {
+    try {
+      const [plan, lessons, files] = await Promise.all([
+        store.getPlan(cls.id), store.getLessons(cls.id), store.listFiles(cls.id).catch((e) => { console.error(e); return []; }),
+      ]);
+      lessons.forEach((l) => { if (l.term === undefined) l.term = 1; });
+      const c = { lessons };
+      sortLessons(c);
+      return { cls, files, result: schedule(plan, c.lessons.filter(isPlaced)) };
+    } catch (e) {
+      console.error(e);
+      return { cls, files: [], result: null, failed: true };
+    }
+  }));
+  const el = document.getElementById('today');
+  if (!el) return; // moved on to another page
+  state.today = data;
+  show(el, todayPanel(data));
+}
+
+function todayPanel(data) {
+  const days = teachingDays();
+  const rowsFor = (iso) => data.flatMap((d) => daySessions(d.result, iso).map((s) => ({ ...s, d })))
+    .sort((a, b) => a.from - b.from || a.d.cls.name.localeCompare(b.d.cls.name));
+  const failed = data.filter((d) => d.failed);
+  return html`
+    <div class="today-grid">
+      ${days.map((iso) => {
+        const rows = rowsFor(iso);
+        return html`
+          <section class="card today-day">
+            <h2>${dayHeading(iso)} <span class="today-date">${fmtDay(iso)}</span></h2>
+            ${rows.length ? html`<ul class="today-list">${rows.map((r) => {
+              const cls = r.d.cls;
+              const when = r.from === r.to ? `P${r.from}` : `P${r.from}–${r.to}`;
+              const files = r.lesson ? r.d.files.filter((f) => f.lessonId === r.lesson.id)
+                .sort((a, b) => (a.locked - b.locked) || a.name.localeCompare(b.name)) : [];
+              return html`
+                <li class="today-row ${r.blocked ? 'cancelled' : ''}" style="--class:${colourOf(cls)}">
+                  <span class="today-period">${when}</span>
+                  <div class="today-body">
+                    <a class="today-class" href="#/class/${cls.id}">${cls.name}</a>
+                    ${r.blocked
+                      ? html`<span class="today-title"><span class="tag">Cancelled</span> ${r.label || 'No class'}</span>`
+                      : html`<a class="today-title" href="#/class/${cls.id}/lessons/${r.lesson.id}">${kindMark(r.lesson)}${r.lesson.title}</a>`}
+                    ${files.length ? html`<div class="today-files">${files.map((f) => html`
+                      <button class="file-chip small" data-action="open-file" data-class="${cls.id}" data-file="${f.id}" title="Open ${f.name}">
+                        <span class="file-icon" aria-hidden="true">${f.locked ? '🔒' : fileIcon(f.name)}</span>
+                        <span class="file-name">${f.name}</span>
+                      </button>`)}</div>` : ''}
+                  </div>
+                </li>`;
+            })}</ul>` : html`<p class="empty small">No lessons on your planners.</p>`}
+          </section>`;
+      })}
+    </div>
+    ${failed.length ? html`<p class="hint">Couldn't load ${failed.map((d) => d.cls.name).join(', ')}. Reload the page to try again.</p>` : ''}`;
 }
 
 function newClassDialog(classes = []) {
@@ -352,22 +516,24 @@ async function joinClass(form) {
 
 /* ---------- class page ---------- */
 
+function showUnavailable(id) {
+  if (!state.user.isTeacher) setJoined(getJoined().filter((j) => j.classId !== id));
+  show($app, frame(html`
+    <section class="card narrow">
+      <h1>This class isn't available</h1>
+      <p>The class key may have changed, or the class has been archived. Ask your teacher for the current key.</p>
+      <a class="btn primary" href="#/">Back to your classes</a>
+    </section>`));
+}
+
 async function showClass(id, tab, sub = '') {
   if (!state.user) { location.hash = '#/'; return; }
   if (!state.cls || state.cls.id !== id) {
+    setCls(null);
     show($app, frame(html`<div class="loading">Opening class…</div>`, { wide: true }));
     let cls = null;
     try { cls = await store.getClass(id); } catch (e) { console.error(e); }
-    if (!cls) {
-      if (!state.user.isTeacher) setJoined(getJoined().filter((j) => j.classId !== id));
-      show($app, frame(html`
-        <section class="card narrow">
-          <h1>This class isn't available</h1>
-          <p>The class key may have changed, or the class has been archived. Ask your teacher for the current key.</p>
-          <a class="btn primary" href="#/">Back to your classes</a>
-        </section>`));
-      return;
-    }
+    if (!cls) { showUnavailable(id); return; }
     const quiet = (p, empty = []) => p.catch((e) => { console.error(e); return empty; });
     const isOwner = cls.owner === state.user.uid;
     // Students never ask for the tracker (and the rules would refuse them).
@@ -378,10 +544,10 @@ async function showClass(id, tab, sub = '') {
     ]);
     // Lessons saved before terms were chosen are Term 1; a null term means "not on the planner".
     lessons.forEach((l) => { if (l.term === undefined) l.term = 1; });
-    state.cls = {
+    setCls({
       id, cls, plan, lessons, units, files, posts, uploads: [], expanded: new Set(), isOwner,
-      students, marks, tracker: { ...emptyTracker(), ...(tracker || {}) },
-    };
+      students, marks, tracker: { ...emptyTracker(), ...(tracker || {}) }, seen: new Set(),
+    });
     sortLessons(state.cls);
     // Once per class per visit: make sure students can open the files they should (see syncFileAccess).
     if (isOwner && files.length && !syncedFiles.has(id)) {
@@ -393,6 +559,7 @@ async function showClass(id, tab, sub = '') {
     state.cls.trackPeriod = state.cls.editTerm <= 2 ? 's1' : 's2';
     state.cls.reportPeriod = 'year';
     recompute();
+    unwatch = store.watchClass(id, (kind, data) => applyRemote(id, kind, data));
   }
   const c = state.cls;
   const tabs = c.isOwner
@@ -427,6 +594,7 @@ function recompute() {
   const c = state.cls;
   c.result = schedule(c.plan, c.lessons.filter(isPlaced));
   c.placed = new Map(c.result.lessons.map((l) => [l.id, l]));
+  syncAfterLesson(c);
 }
 
 function renderPanel() {
@@ -992,9 +1160,40 @@ function lessonBuilder(c, l) {
       </section>
       <div class="builder-foot">
         <a class="btn small ghost" href="#/class/${c.id}/lessons/${l.id}" data-action="preview">Preview as a student</a>
+        <button class="btn small" data-action="copy-lesson">Copy to another class</button>
         <button class="btn small danger-btn" data-action="delete-lesson">Delete lesson</button>
       </div>
+      ${c.copyTo ? copyDialog(c, l) : ''}
     </article>`;
+}
+
+// Copy this lesson, or its whole unit, into another of the teacher's classes.
+function copyDialog(c, l) {
+  const unit = unitById(unitIdOf(c, l));
+  const unitCount = unit ? unitLessons(c, unit.id).length : 0;
+  return html`
+    <dialog id="copy-lesson">
+      <form data-form="copy-lesson" method="dialog">
+        <h2>Copy to another class</h2>
+        ${unit && unitCount > 1 ? html`
+          <fieldset class="choice">
+            <legend>What to copy</legend>
+            <label class="check"><input type="radio" name="what" value="lesson" checked> Just this lesson</label>
+            <label class="check"><input type="radio" name="what" value="unit"> The whole unit, ${unit.name} (${plural(unitCount, 'lesson')})</label>
+          </fieldset>` : ''}
+        <label>Copy to
+          <select name="to">
+            ${c.copyTo.map((o) => html`<option value="${o.id}">${o.name}${o.archived ? ' (archived)' : ''}</option>`)}
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" name="planner" ${raw(isPlaced(l) ? 'checked' : '')}> Put it on that class's planner too, at the end of the same term</label>
+        <p class="hint">Files come too, and teacher-only files stay teacher-only. A single lesson goes into the unit with the same name there, if there is one. Nothing in this class changes.</p>
+        <div class="dialog-actions">
+          <button class="btn ghost" type="button" data-action="close-dialog">Cancel</button>
+          <button class="btn primary" type="submit">Copy</button>
+        </div>
+      </form>
+    </dialog>`;
 }
 
 // The lesson as students see it: what it is, when it's on, and its files.
@@ -1267,10 +1466,51 @@ const msToISO = (ms) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
+// "Thu 12 Nov", or "Thu 12 Nov, 4 pm" when the time isn't midnight.
+function fmtWhen(ms) {
+  const d = new Date(ms);
+  const day = fmtDay(msToISO(ms));
+  if (!d.getHours() && !d.getMinutes()) return day;
+  return `${day}, ${d.toLocaleTimeString('en-AU', { hour: 'numeric', minute: d.getMinutes() ? '2-digit' : undefined }).replace(/\s?([ap])\.?m\.?/i, ' $1m').toLowerCase()}`;
+}
+
+// "Open teacher-only files after the lesson": the files unlock at the end of the school day
+// (periods have no clock times) on the date of the lesson's last period. Worked out again
+// whenever the timetable is, so the unlock moves with the lesson.
+const AFTER_LESSON_HOUR = 16;
+const AFTER_LESSON_TIME = '4 pm';
+function afterLessonAt(c, l) {
+  const p = isPlaced(l) ? c.placed.get(l.id) : null;
+  const date = p && p.end && p.end.date;
+  return date ? new Date(`${date}T${String(AFTER_LESSON_HOUR).padStart(2, '0')}:00:00`).getTime() : null;
+}
+function syncAfterLesson(c) {
+  if (!c.isOwner) return;
+  const jobs = [];
+  for (const l of c.lessons) {
+    if (!l.openAfter) continue;
+    const at = afterLessonAt(c, l);
+    for (const f of c.files) {
+      if (f.lessonId !== l.id || !f.locked || f.unlockAt === at) continue;
+      if (c.uploads.some((u) => u.lessonId === f.lessonId && u.name.slice(0, 200) === f.name)) continue; // not stored yet
+      f.unlockAt = at;
+      jobs.push(store.updateFile(c.id, f, { unlockAt: at }));
+    }
+  }
+  if (jobs.length) {
+    Promise.all(jobs).catch((e) => {
+      console.error(e);
+      toast("Couldn't update when some teacher-only files open. Reload the page to try again.", 'error');
+    });
+  }
+}
+
 // Files in the lesson builder: attach, mark teacher-only, set an unlock date or unlock now.
 function teacherFiles(c, l) {
-  const files = filesFor(c, l.id);
   const ups = c.uploads.filter((u) => u.lessonId === l.id);
+  // A file still uploading shows as its progress row only.
+  const files = filesFor(c, l.id).filter((f) => !ups.some((u) => u.name.slice(0, 200) === f.name));
+  const auto = !!l.openAfter;
   return html`
     <div class="lesson-files">
       ${files.length || ups.length ? html`<ul class="file-list">
@@ -1282,7 +1522,9 @@ function teacherFiles(c, l) {
           </button>
           <label class="check"><input type="checkbox" data-ffield="locked" ${raw(f.locked ? 'checked' : '')}> Teacher only</label>
           ${f.locked ? html`
-            <label class="unlock-date">Unlocks <input type="date" data-ffield="unlockAt" value="${f.unlockAt ? msToISO(f.unlockAt) : ''}" aria-label="Unlock date for ${f.name}"></label>
+            ${auto
+              ? html`<span class="unlock-auto">${f.unlockAt ? `Opens ${fmtWhen(f.unlockAt)}` : 'Opens after the lesson, once it\'s on the planner'}</span>`
+              : html`<label class="unlock-date">Unlocks <input type="date" data-ffield="unlockAt" value="${f.unlockAt ? msToISO(f.unlockAt) : ''}" aria-label="Unlock date for ${f.name}"></label>`}
             <label class="check"><input type="checkbox" data-ffield="unlocked" ${raw(f.unlocked ? 'checked' : '')}> Unlocked now</label>
             <span class="tag ${isOpen(f) ? '' : 'bad'}">${isOpen(f) ? 'Students can open' : 'Hidden from students'}</span>` : ''}
           <button class="icon-btn danger" data-action="delete-file" aria-label="Delete ${f.name}">✕</button>
@@ -1290,6 +1532,12 @@ function teacherFiles(c, l) {
         ${ups.map((u) => html`<li class="file-row uploading"><span class="file-chip"><span class="file-icon" aria-hidden="true">${fileIcon(u.name)}</span>
           <span class="file-name">${u.name}</span><span class="file-size" id="up-${u.key}">Uploading ${Math.round(u.pct * 100)}%</span></span></li>`)}
       </ul>` : ''}
+      ${files.some((f) => f.locked) || auto ? html`
+        <label class="check open-after"><input type="checkbox" data-lfield="openAfter" ${raw(auto ? 'checked' : '')}>
+          Open teacher-only files after the lesson</label>
+        <p class="hint">${auto
+          ? `They open at ${AFTER_LESSON_TIME} on the day of the lesson's last period, and move when the planner moves the lesson.`
+          : 'Tick this for answers: they open by themselves once the lesson is over, even when the planner moves it.'}</p>` : ''}
       <div class="file-add">
         <label class="btn small">Attach files<input type="file" multiple accept="${ACCEPT}" data-upload="${l.id}" class="sr-only"></label>
         <label class="btn small">Attach teacher-only file<input type="file" multiple accept="${ACCEPT}" data-upload="${l.id}" data-locked="1" class="sr-only"></label>
@@ -1306,7 +1554,7 @@ function studentFiles(c, lessonId) {
         <span class="file-icon" aria-hidden="true">${fileIcon(f.name)}</span><span class="file-name">${f.name}</span></button></li>`
     : html`<li class="file-locked"><span class="file-icon" aria-hidden="true">🔒</span>
         <span class="file-name">${f.name}</span>
-        <span class="file-when">${f.unlockAt ? `opens ${fmtDay(msToISO(f.unlockAt))}` : 'your teacher will unlock this'}</span></li>`)}</ul>`;
+        <span class="file-when">${f.unlockAt ? `opens ${fmtWhen(f.unlockAt)}` : 'your teacher will unlock this'}</span></li>`)}</ul>`;
 }
 
 async function uploadFiles(input) {
@@ -1327,7 +1575,10 @@ async function uploadFiles(input) {
         const el = document.getElementById(`up-${up.key}`);
         if (el) el.textContent = `Uploading ${Math.round(pct * 100)}%`;
       });
-      c.files.push(f);
+      // The live listener may have brought the record in already.
+      c.files = [...c.files.filter((x) => x.id !== f.id), f];
+      c.uploads = c.uploads.filter((u) => u !== up);
+      syncAfterLesson(c);
       toast(`Uploaded ${file.name}`);
     } catch (e) {
       console.error(e);
@@ -1338,14 +1589,17 @@ async function uploadFiles(input) {
   }
 }
 
-async function openFile(fileId) {
-  const c = state.cls;
-  const f = c.files.find((x) => x.id === fileId);
+// classId is given for a file on the Today list (teacher home); otherwise it's the open class's.
+async function openFile(fileId, classId) {
+  const day = classId && state.today ? state.today.find((d) => d.cls.id === classId) : null;
+  const files = day ? day.files || [] : state.cls ? state.cls.files : [];
+  const cid = day ? classId : state.cls && state.cls.id;
+  const f = files.find((x) => x.id === fileId);
   if (!f) return;
   // Open the tab straight away (pop-up blockers allow it during the click), then fill it in.
   const win = window.open('', '_blank');
   try {
-    const url = await store.fileUrl(c.id, f);
+    const url = await store.fileUrl(cid, f);
     if (win) win.location.href = url; else location.href = url;
   } catch (e) {
     if (win) win.close();
@@ -1364,6 +1618,7 @@ async function updateFile(fileId, field, el) {
   Object.assign(f, patch);
   renderPanel();
   await saving(store.updateFile(c.id, f, patch));
+  if (field === 'locked') { syncAfterLesson(c); renderPanel(); }
 }
 
 function slotsByWeek(r) {
@@ -2068,7 +2323,7 @@ $app.addEventListener('click', async (ev) => {
   } else if (action === 'sign-out') {
     if (!state.user.isTeacher && !confirm('Leave all your classes on this browser? You will need the class keys to come back.')) return;
     if (!state.user.isTeacher) setJoined([]);
-    state.cls = null;
+    setCls(null);
     location.hash = '#/';
     await store.signOut();
   } else if (action === 'remove-teacher') {
@@ -2079,6 +2334,7 @@ $app.addEventListener('click', async (ev) => {
     document.getElementById('new-class').showModal();
   } else if (action === 'close-dialog') {
     btn.closest('dialog').close();
+    if (c) c.copyTo = null;
   } else if (action === 'week-prev' || action === 'week-next' || action === 'week-today' || action === 'week-goto') {
     if (action === 'week-prev') c.weekPos--;
     else if (action === 'week-next') c.weekPos++;
@@ -2171,7 +2427,7 @@ $app.addEventListener('click', async (ev) => {
     renderPanel();
     await saving(store.deleteAnnouncement(c.id, id), 'Announcement deleted');
   } else if (action === 'open-file') {
-    await openFile(btn.dataset.file);
+    await openFile(btn.dataset.file, btn.dataset.class);
   } else if (action === 'delete-file') {
     const f = c.files.find((x) => x.id === btn.closest('[data-file]').dataset.file);
     if (!f || !confirm(`Delete ${f.name}? Students won't be able to open it any more.`)) return;
@@ -2200,6 +2456,14 @@ $app.addEventListener('click', async (ev) => {
     c.importFrom = others;
     renderPanel();
     document.getElementById('import-events')?.showModal();
+  } else if (action === 'copy-lesson') {
+    let others;
+    try { others = (await store.listMyClasses()).filter((o) => o.id !== c.id); } catch (e) { console.error(e); toast("Couldn't load your classes.", 'error'); return; }
+    if (!others.length) { toast("You don't have another class to copy to yet."); return; }
+    others.sort((a, b) => (a.archived - b.archived) || a.name.localeCompare(b.name));
+    c.copyTo = others;
+    renderPanel();
+    document.getElementById('copy-lesson')?.showModal();
   } else if (action === 'delete-event') {
     const i = Number(btn.closest('[data-event]').dataset.event);
     c.plan.events.splice(i, 1);
@@ -2338,6 +2602,45 @@ $app.addEventListener('submit', async (ev) => {
     }
     form.closest('dialog').close();
     location.hash = `#/class/${id}/setup`;
+  } else if (kind === 'copy-lesson') {
+    const to = c.copyTo && c.copyTo.find((o) => o.id === form.to.value);
+    const l = lessonById(c.lessonId);
+    if (!to || !l) return;
+    const unit = unitById(unitIdOf(c, l));
+    const whole = !!(unit && form.what && form.what.value === 'unit');
+    // The unit's lessons in Lessons-tab order (copyToClass keeps their planner order separately).
+    const lessons = whole ? libLessons(c, unit.id) : [l];
+    const btn = form.querySelector('button[type=submit]');
+    btn.disabled = true;
+    btn.textContent = 'Copying…';
+    let res;
+    try {
+      const [units, theirs] = await Promise.all([store.getUnits(to.id), store.getLessons(to.id)]);
+      const copy = copyToClass(
+        { unit: whole ? unit : null, lessons, files: c.files, unitName: unit ? unit.name : '' },
+        { units, lessons: theirs },
+        (k) => store.newId(to.id, k),
+        { onPlanner: form.planner.checked },
+      );
+      res = await store.copyInto(c.id, to.id, copy, (done, total) => {
+        if (total) btn.textContent = `Copying files ${done}/${total}…`;
+      });
+    } catch (e) {
+      console.error(e);
+      btn.disabled = false;
+      btn.textContent = 'Copy';
+      toast(`Couldn't copy to ${to.name}. Try again.`, 'error');
+      return;
+    }
+    form.closest('dialog').close();
+    c.copyTo = null;
+    renderPanel();
+    const what = whole ? `${unit.name} (${plural(res.lessons, 'lesson')})` : `"${l.title}"`;
+    if (res.failed.length) {
+      toast(`Copied ${what} to ${to.name}, but ${plural(res.failed.length, 'file')} couldn't be copied: ${res.failed.join(', ')}.`, 'error');
+    } else {
+      toast(`Copied ${what}${res.files ? ` and ${plural(res.files, 'file')}` : ''} to ${to.name}`);
+    }
   } else if (kind === 'import-events') {
     const from = c.importFrom && c.importFrom.find((o) => o.id === form.from.value);
     if (!from) return;
@@ -2824,7 +3127,7 @@ store.onAuth(async (user) => {
   }
   const changed = !state.user || !user || state.user.uid !== user.uid;
   state.user = user;
-  if (changed) state.cls = null;
+  if (changed) setCls(null);
   if (!state.joining) route();
 });
 route();

@@ -531,6 +531,39 @@ label.inline select { width: auto; margin: 0; padding: 6px 10px; }
 a.up-title:hover { text-decoration: underline; }
 .more { font-weight: 700; font-size: .92rem; text-decoration: none; }
 
+/* ---------- today: the teacher's lessons across classes ---------- */
+.today { margin-bottom: 28px; }
+.today .loading.small { padding: 12px 0; text-align: left; }
+.today-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 20px; }
+.today-day h2 { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.today-date { font: 700 .9rem var(--font-body); color: var(--ink-2); }
+.today-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.today-row {
+  display: grid; grid-template-columns: 3.4rem minmax(0, 1fr); gap: 10px; align-items: start;
+  padding: 8px 10px; border-radius: 10px; border-left: 4px solid var(--class);
+  background: color-mix(in srgb, var(--class) 6%, white);
+}
+.today-row.cancelled { opacity: .7; }
+.today-period { font: 800 .95rem var(--font-head); color: var(--ink-2); padding-top: 1px; }
+.today-body { display: grid; gap: 2px; min-width: 0; }
+.today-class { font-size: .8rem; font-weight: 700; color: var(--class); text-decoration: none; }
+.today-title { font-weight: 700; text-decoration: none; overflow-wrap: anywhere; color: var(--ink); }
+a.today-title:hover, a.today-class:hover { text-decoration: underline; }
+.today-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.file-chip.small { padding: 2px 8px 2px 3px; gap: 6px; }
+.file-chip.small .file-name { font-size: .82rem; max-width: 220px; }
+
+/* ---------- copy dialog, and answers that open after the lesson ---------- */
+dialog .check { white-space: normal; align-items: flex-start; }
+dialog .check input { flex: none; margin-top: 2px; }
+.choice { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; }
+.choice legend { font-weight: 700; margin-bottom: 4px; padding: 0; }
+.unlock-auto { font-size: .82rem; color: var(--ink-2); font-weight: 700; }
+.open-after { white-space: normal; }
+.lesson-files .open-after + .hint { margin: -6px 0 0; font-size: .85rem; }
+.builder-foot { justify-content: flex-start; }
+.builder-foot .danger-btn { margin-left: auto; }
+
 /* ---------- teacher list (admin) ---------- */
 .teachers-head { max-width: 520px; margin-bottom: 0; }
 .allow-form { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 16px; }
