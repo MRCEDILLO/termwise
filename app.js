@@ -263,14 +263,22 @@ async function showTeacherHome() {
           </div>
         </a>`)}
     </div>
-    ${newClassDialog()}`, { wide: true }));
+    ${newClassDialog(classes)}`, { wide: true }));
 }
 
-function newClassDialog() {
+function newClassDialog(classes = []) {
   return html`
     <dialog id="new-class">
       <form data-form="new-class" method="dialog">
         <h2>New class</h2>
+        ${classes.length ? html`
+          <label>Start from
+            <select name="template">
+              <option value="">A blank class</option>
+              ${classes.map((c) => html`<option value="${c.id}">Copy of ${c.name}${c.archived ? ' (archived)' : ''}</option>`)}
+            </select>
+          </label>
+          <p class="hint">A copy brings across the lessons, units, lesson files and where each lesson sits on the planner. Students, marks, announcements, term dates and the timetable are not copied.</p>` : ''}
         <label>Class name <input name="name" required maxlength="80" placeholder="8A Maths"></label>
         <div class="row2">
           <label>Subject <input name="subject" maxlength="80" placeholder="Maths"></label>
@@ -2262,11 +2270,36 @@ $app.addEventListener('submit', async (ev) => {
       colour: Number(form.colour.value) || 0,
     };
     if (!data.name) return;
+    const template = form.template ? form.template.value : '';
+    const btn = form.querySelector('button[type=submit]');
+    btn.disabled = true;
+    let id;
     try {
-      const id = await store.createClass(data);
-      form.closest('dialog').close();
-      location.hash = `#/class/${id}/setup`;
-    } catch (e) { console.error(e); toast("Couldn't create the class. Try again.", 'error'); }
+      id = await store.createClass(data);
+    } catch (e) {
+      console.error(e);
+      btn.disabled = false;
+      toast("Couldn't create the class. Try again.", 'error');
+      return;
+    }
+    if (template) {
+      try {
+        btn.textContent = 'Copying lessons…';
+        const res = await store.copyFromTemplate(template, id, (done, total) => {
+          if (total) btn.textContent = `Copying files ${done}/${total}…`;
+        });
+        if (res.failed.length) {
+          toast(`Class made, but ${plural(res.failed.length, 'file')} couldn't be copied: ${res.failed.join(', ')}. Upload ${res.failed.length === 1 ? 'it' : 'them'} again on the Lessons tab.`, 'error');
+        } else {
+          toast(`Copied ${plural(res.lessons, 'lesson')}${res.units ? `, ${plural(res.units, 'unit')}` : ''}${res.files ? ` and ${plural(res.files, 'file')}` : ''}`);
+        }
+      } catch (e) {
+        console.error(e);
+        toast("The class was made, but copying the lessons didn't finish. Check the Lessons tab.", 'error');
+      }
+    }
+    form.closest('dialog').close();
+    location.hash = `#/class/${id}/setup`;
   } else if (kind === 'details') {
     const patch = {
       name: form.name.value.trim() || c.cls.name,
