@@ -3,6 +3,7 @@
 
 import { newKey } from './keys.js';
 import { emptyPlan } from './planner.js';
+import { templateCopy } from './template.js';
 
 const DATA_KEY = 'termwise-demo-v4';
 const USER_KEY = 'termwise-demo-user-v1';
@@ -322,6 +323,18 @@ export function createDemoStore() {
       const open = rec && (!rec.locked || rec.unlocked || (rec.unlockAt != null && Date.now() >= rec.unlockAt));
       if (!rec || (!open && user.uid !== data.classes[classId].owner)) throw Object.assign(new Error('locked'), { code: 'storage/unauthorized' });
       return rec.blob;
+    },
+
+    async copyFromTemplate(fromId, toId, onProgress = () => {}) {
+      const copy = templateCopy({
+        units: data.units[fromId] || [], lessons: data.lessons[fromId] || [], files: demoFiles[fromId] || [],
+      }, () => uid());
+      data.units[toId] = structuredClone(copy.units);
+      data.lessons[toId] = structuredClone(copy.lessons);
+      demoFiles[toId] = copy.files.map(({ from, ...f }) => ({ ...f, createdAt: Date.now(), blob: from.blob }));
+      onProgress(copy.files.length, copy.files.length);
+      persist();
+      return { units: copy.units.length, lessons: copy.lessons.length, files: copy.files.length, failed: [] };
     },
 
     async joinWithKey(key) {

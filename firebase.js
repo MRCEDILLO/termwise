@@ -10,11 +10,12 @@ import {
   writeBatch, query, where, orderBy, limit, serverTimestamp, Timestamp, deleteField,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import {
-  getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject, getMetadata, updateMetadata,
+  getStorage, ref, uploadBytes, uploadBytesResumable, getBytes, getDownloadURL, deleteObject, getMetadata, updateMetadata,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js';
 import { FILE_TYPES, fileExt, storageName } from './files.js';
 import { newKey } from './keys.js';
 import { emptyPlan } from './planner.js';
+import { templateCopy } from './template.js';
 
 export function createFirebaseStore(config) {
   const app = initializeApp(config);
@@ -315,6 +316,43 @@ export function createFirebaseStore(config) {
     // A link to open or download the file. Refused by the rules while a file is still locked.
     fileUrl(classId, f) {
       return getDownloadURL(fileRef(classId, f));
+    },
+
+    /* ---------- new class from a template ---------- */
+
+    // Copies another of the teacher's classes' units, lessons (with their planner term and
+    // order) and lesson files into a new class. Nothing else comes across (see template.js).
+    // Returns counts, plus the names of any files that couldn't be copied.
+    async copyFromTemplate(fromId, toId, onProgress = () => {}) {
+      const [units, lessons, files] = await Promise.all([this.getUnits(fromId), this.getLessons(fromId), this.listFiles(fromId)]);
+      const copy = templateCopy({ units, lessons, files }, (kind) => doc(collection(db, 'classes', toId, `${kind}s`)).id);
+      const writes = [
+        ...copy.units.map(({ id, ...data }) => [doc(db, 'classes', toId, 'units', id), data]),
+        ...copy.lessons.map(({ id, ...data }) => [doc(db, 'classes', toId, 'lessons', id), data]),
+      ];
+      for (let i = 0; i < writes.length; i += 450) {
+        const b = writeBatch(db);
+        writes.slice(i, i + 450).forEach(([r, data]) => b.set(r, data));
+        await b.commit();
+      }
+      const failed = [];
+      let done = 0;
+      onProgress(done, copy.files.length);
+      for (const f of copy.files) {
+        const { from, id, ...meta } = f;
+        const recRef = doc(db, 'classes', toId, 'files', id);
+        try {
+          const bytes = await getBytes(fileRef(fromId, from));
+          await setDoc(recRef, { ...meta, createdAt: serverTimestamp() });
+          await uploadBytes(fileRef(toId, f), bytes, { contentType: meta.type, customMetadata: accessMeta(meta) })
+            .catch(async (e) => { await deleteDoc(recRef).catch(() => {}); throw e; });
+        } catch (e) {
+          console.error(e);
+          failed.push(from.name);
+        }
+        onProgress(++done, copy.files.length);
+      }
+      return { units: copy.units.length, lessons: copy.lessons.length, files: copy.files.length - failed.length, failed };
     },
 
     /* ---------- tracker: owner only (the rules refuse everyone else) ---------- */

@@ -21,6 +21,7 @@ before(async () => {
     .replace("'./files.js'", `'${new URL('../files.js', import.meta.url)}'`)
     .replace("'./keys.js'", `'${new URL('../keys.js', import.meta.url)}'`)
     .replace("'./planner.js'", `'${new URL('../planner.js', import.meta.url)}'`)
+    .replace("'./template.js'", `'${new URL('../template.js', import.meta.url)}'`)
     .replace('initializeApp(config)', 'initializeApp(config, config.appName)')
     .replace('const db = getFirestore(app);', `const db = getFirestore(app);
   connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
@@ -188,6 +189,59 @@ test('teacher creates a class, a student joins, the key is regenerated, the clas
 
   await teacher.deleteLesson(id, a.id);
   assert.deepEqual((await teacher.getLessons(id)).map((l) => l.title), ['1B']);
+});
+
+test('a new class copies lessons, units, planner placement and files from a template, and nothing else', async () => {
+  const run = Date.now();
+  const teacher = createFirebaseStore(config(`tp${run}`, { sub: `tpl${run}`, email: 'gabe@example.com', email_verified: true, name: 'Gabe' }));
+  await teacher.signInTeacher();
+  await waitForUser(teacher);
+  const src = await teacher.createClass({ name: '8A Maths', subject: 'Maths', year: '2026', colour: 1 });
+  const unit = { id: teacher.newUnitId(src), name: 'Algebra', order: 0, colour: 3 };
+  await teacher.saveUnit(src, unit);
+  const l1 = { id: teacher.newLessonId(src), title: 'Intro', description: 'Start', unitId: unit.id, periods: 2, assessment: false, homework: true, term: 2, order: 0, libOrder: 0 };
+  const l2 = { id: teacher.newLessonId(src), title: 'Spare', description: '', unitId: null, periods: 1, assessment: true, homework: false, term: null, order: 1, libOrder: 1 };
+  await teacher.saveLesson(src, l1);
+  await teacher.saveLesson(src, l2);
+  const pdf = (name) => new File([new Uint8Array([37, 80, 68, 70])], name);
+  const open = await teacher.uploadFile(src, l1.id, pdf('Sheet.pdf'));
+  const shut = await teacher.uploadFile(src, l1.id, pdf('Answers.pdf'), { locked: true });
+  Object.assign(shut, { unlocked: true });
+  await teacher.updateFile(src, shut, { unlocked: true });
+  await teacher.saveStudents(src, [{ id: teacher.newStudentId(src), name: 'Sam' }]);
+  await teacher.addAnnouncement(src, 'Hello');
+  await teacher.savePlan(src, { terms: [{ start: '2026-01-27', weeks: 10 }], pattern: ['1-1'], events: [] });
+
+  const id = await teacher.createClass({ name: '8B Maths', subject: 'Maths', year: '2026', colour: 2 });
+  const res = await teacher.copyFromTemplate(src, id);
+  assert.deepEqual(res, { units: 1, lessons: 2, files: 2, failed: [] });
+
+  const [u] = await teacher.getUnits(id);
+  assert.equal(u.name, 'Algebra');
+  assert.equal(u.colour, 3);
+  assert.notEqual(u.id, unit.id);
+  const lessons = await teacher.getLessons(id);
+  assert.deepEqual(lessons.map((l) => [l.title, l.term, l.order, l.periods]), [['Intro', 2, 0, 2], ['Spare', null, 1, 1]]);
+  assert.equal(lessons[0].unitId, u.id);
+  assert.equal(lessons[1].assessment, true);
+  const files = await teacher.listFiles(id);
+  assert.deepEqual(files.map((f) => [f.name, f.lessonId, f.locked, f.unlocked]).sort(),
+    [['Answers.pdf', lessons[0].id, true, false], ['Sheet.pdf', lessons[0].id, false, false]]);
+  assert.ok(await teacher.fileUrl(id, files[0]), 'the copied file is really there');
+
+  // A student of the new class opens the ordinary file but not the teacher-only one.
+  const student = createFirebaseStore(config(`tps${run}`));
+  assert.equal(await student.joinWithKey((await teacher.getClass(id)).currentKey), id);
+  const seen = await student.listFiles(id);
+  assert.ok(await student.fileUrl(id, seen.find((f) => f.name === 'Sheet.pdf')));
+  await assert.rejects(student.fileUrl(id, seen.find((f) => f.name === 'Answers.pdf')), /unauthorized/);
+  assert.equal(await student.getClass(src), null, 'joining the copy gives no way into the original');
+
+  // Nothing else came across.
+  assert.deepEqual(await teacher.getStudents(id), []);
+  assert.deepEqual(await teacher.getAnnouncements(id), []);
+  assert.deepEqual((await teacher.getPlan(id)).pattern, []);
+  assert.equal(open.name, 'Sheet.pdf');
 });
 
 test('a Google account the admin has not added cannot make a class', async () => {
