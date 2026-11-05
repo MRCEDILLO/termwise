@@ -13,6 +13,7 @@ import {
   emptyTracker, defaultScale, manualLevels, trackerColumns, inTerms, parseScore, result, studentSummary,
   assessmentSummary, homeworkSummary, classHomework, parseNames, sortStudents, scaleProblem,
 } from './tracker.js';
+import { importEvents } from './template.js';
 
 const store = FIREBASE_CONFIG.apiKey
   ? (await import('./firebase.js')).createFirebaseStore(FIREBASE_CONFIG)
@@ -1991,7 +1992,11 @@ function setupPanel(c) {
               </tbody>
             </table>
           </div>` : html`<p class="empty small">No events yet.</p>`}
-        <button class="btn" data-action="add-event">Add event</button>
+        <div class="row">
+          <button class="btn" data-action="add-event">Add event</button>
+          <button class="btn" data-action="import-events">Import from another class</button>
+        </div>
+        ${c.importFrom ? importEventsDialog(c) : ''}
       </section>
 
       <section class="card">
@@ -2013,6 +2018,26 @@ function setupPanel(c) {
           : html`<p class="hint">Archiving closes the class to students at once. You can still open it and restore it.</p><button class="btn danger-btn" data-action="archive" data-value="1">Archive class</button>`}
       </section>
     </div>`;
+}
+
+// Pick another of your classes and copy its events and blocked time into this one.
+function importEventsDialog(c) {
+  return html`
+    <dialog id="import-events">
+      <form data-form="import-events" method="dialog">
+        <h2>Import events</h2>
+        <label>Copy events and blocked time from
+          <select name="from">
+            ${c.importFrom.map((o) => html`<option value="${o.id}">${o.name}${o.archived ? ' (archived)' : ''}</option>`)}
+          </select>
+        </label>
+        <p class="hint">They're added to this class's events, by term, week, day and period. Nothing here is removed or changed, and events this class already has aren't copied twice.</p>
+        <div class="dialog-actions">
+          <button class="btn ghost" type="button" data-action="close-dialog">Cancel</button>
+          <button class="btn primary" type="submit">Import</button>
+        </div>
+      </form>
+    </dialog>`;
 }
 
 async function savePlan(msg = 'Saved') {
@@ -2162,6 +2187,14 @@ $app.addEventListener('click', async (ev) => {
     renderPanel();
     document.querySelector(`[data-event="${c.plan.events.length - 1}"] [data-field="label"]`)?.focus();
     await savePlan('Event added');
+  } else if (action === 'import-events') {
+    let others;
+    try { others = (await store.listMyClasses()).filter((o) => o.id !== c.id); } catch (e) { console.error(e); toast("Couldn't load your classes.", 'error'); return; }
+    if (!others.length) { toast("You don't have another class to import from yet."); return; }
+    others.sort((a, b) => (a.archived - b.archived) || a.name.localeCompare(b.name));
+    c.importFrom = others;
+    renderPanel();
+    document.getElementById('import-events')?.showModal();
   } else if (action === 'delete-event') {
     const i = Number(btn.closest('[data-event]').dataset.event);
     c.plan.events.splice(i, 1);
@@ -2300,6 +2333,29 @@ $app.addEventListener('submit', async (ev) => {
     }
     form.closest('dialog').close();
     location.hash = `#/class/${id}/setup`;
+  } else if (kind === 'import-events') {
+    const from = c.importFrom && c.importFrom.find((o) => o.id === form.from.value);
+    if (!from) return;
+    const btn = form.querySelector('button[type=submit]');
+    btn.disabled = true;
+    let res;
+    try {
+      const other = await store.getPlan(from.id);
+      res = importEvents(c.plan.events, other.events || [], () => Math.random().toString(36).slice(2, 10));
+    } catch (e) {
+      console.error(e);
+      btn.disabled = false;
+      toast(`Couldn't read ${from.name}'s events. Try again.`, 'error');
+      return;
+    }
+    form.closest('dialog').close();
+    c.importFrom = null;
+    const already = res.skipped ? ` (${res.skipped} already here)` : '';
+    if (!res.added) { renderPanel(); toast(`Nothing new to import from ${from.name}${already}`); return; }
+    const before = c.plan.events;
+    c.plan.events = res.events;
+    renderPanel();
+    if (!await savePlan(`Imported ${plural(res.added, 'event')} from ${from.name}${already}`)) { c.plan.events = before; renderPanel(); }
   } else if (kind === 'details') {
     const patch = {
       name: form.name.value.trim() || c.cls.name,

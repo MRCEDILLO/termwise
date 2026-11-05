@@ -49,3 +49,32 @@ export function templateCopy({ units = [], lessons = [], files = [] }, newId) {
 
   return { units: newUnits, lessons: newLessons, files: newFiles };
 }
+
+// Importing events and blocked time from another class into this one. The other
+// class's events are added to this class's, never replacing them. An event that
+// matches one already here (same term, week, day, period and label, ignoring case
+// and spaces) is skipped, so importing the same class twice adds nothing new.
+// newId() returns a fresh event id. Returns { events, added, skipped }.
+export function importEvents(current = [], incoming = [], newId) {
+  const keyOf = (e) => [Number(e.term), Number(e.week), String(e.day), String(e.period),
+    String(e.label || '').trim().replace(/\s+/g, ' ').toLowerCase()].join('|');
+  const seen = new Set(current.map(keyOf));
+  const events = [...current];
+  let added = 0;
+  let skipped = 0;
+  for (const e of incoming) {
+    const k = keyOf(e);
+    if (seen.has(k)) { skipped++; continue; }
+    seen.add(k);
+    events.push({
+      id: newId(),
+      term: Number(e.term) || 1,
+      week: Number(e.week) || 1,
+      day: e.day === 'All' ? 'All' : Number(e.day) || 'All',
+      period: e.period === 'All' ? 'All' : Number(e.period) || 'All',
+      label: String(e.label || '').trim().slice(0, 80),
+    });
+    added++;
+  }
+  return { events, added, skipped };
+}
