@@ -509,10 +509,24 @@ const isPlaced = (l) => l.term >= 1 && l.term <= TERM_COUNT;
 // The lesson's unit, or null if it has none (or its unit was deleted).
 const unitIdOf = (c, l) => (l.unitId && c.units.some((u) => u.id === l.unitId) ? l.unitId : null);
 const unitLessons = (c, unitId) => c.lessons.filter((l) => unitIdOf(c, l) === unitId);
+// A unit keeps its colour once it has been dragged (saved as `colour`); before that, its place picks it.
+const unitColourIndex = (c, u) => (Number.isInteger(u.colour) ? u.colour : c.units.indexOf(u));
 const unitColour = (c, unitId) => {
-  const i = c.units.findIndex((u) => u.id === unitId);
-  return i < 0 ? 'var(--line-2)' : CLASS_COLOURS[i % CLASS_COLOURS.length];
+  const u = c.units.find((x) => x.id === unitId);
+  return u ? CLASS_COLOURS[unitColourIndex(c, u) % CLASS_COLOURS.length] : 'var(--line-2)';
 };
+// The first colour no unit is using yet (they repeat once all are taken).
+function freeUnitColour(c) {
+  const used = new Set(c.units.map((u) => unitColourIndex(c, u) % CLASS_COLOURS.length));
+  const i = CLASS_COLOURS.findIndex((_, k) => !used.has(k));
+  return i >= 0 ? i : c.units.length % CLASS_COLOURS.length;
+}
+
+// The Lessons tab has its own order (`libOrder`), separate from the planner's timeline order,
+// so dragging there never moves anything on the timetable. Lessons never dragged keep their timeline order.
+const libKey = (l) => (typeof l.libOrder === 'number' ? l.libOrder : 100000 + (l.order ?? 0));
+const nextLibOrder = (c) => (c.lessons.length ? Math.max(...c.lessons.map(libKey)) + 1 : 0);
+const libLessons = (c, unitId) => unitLessons(c, unitId).sort((a, b) => libKey(a) - libKey(b));
 
 // Timeline order: placed lessons by term, then the rest. Numbered 0, 1, 2…
 function sortLessons(c) {
@@ -532,7 +546,10 @@ async function updateLesson(id, field, value) {
   if (field === 'periods') value = clampPeriods(value);
   if (field === 'title') value = String(value).trim().slice(0, 200) || lesson.title;
   if (field === 'description') value = String(value).slice(0, 5000);
-  if (field === 'unitId') value = value || null;
+  if (field === 'unitId') {
+    value = value || null;
+    if (value !== unitIdOf(state.cls, lesson)) lesson.libOrder = nextLibOrder(state.cls); // goes to the end of its new unit
+  }
   lesson[field] = value;
   recompute();
   await saving(store.saveLesson(state.cls.id, lesson));
@@ -552,6 +569,7 @@ async function placeLessons(list, term, msg) {
 async function createLessons(rows, { term = null, unitId = null } = {}, msg = 'Lesson created') {
   const c = state.cls;
   let order = nextOrder(c);
+  let libOrder = nextLibOrder(c);
   const added = rows.map((row) => ({
     id: store.newLessonId(c.id),
     title: row.title,
@@ -562,6 +580,7 @@ async function createLessons(rows, { term = null, unitId = null } = {}, msg = 'L
     homework: false,
     term,
     order: order++,
+    libOrder: libOrder++,
   }));
   c.lessons.push(...added);
   sortLessons(c);
@@ -786,7 +805,7 @@ async function pickResult(i) {
   if (!it || it.disabled) return;
   const term = c.editTerm;
   if (it.kind === 'unit') {
-    const list = unitLessons(c, it.id).filter((l) => !isPlaced(l));
+    const list = libLessons(c, it.id).filter((l) => !isPlaced(l));
     await placeLessons(list, term, `Added ${plural(list.length, 'lesson')} to Term ${term}`);
   } else if (it.kind === 'lesson') {
     const l = lessonById(it.id);
@@ -803,16 +822,19 @@ async function pickResult(i) {
 function libraryPanel(c) {
   const sel = c.lessonId ? lessonById(c.lessonId) : null;
   const groups = [
-    ...c.units.map((u) => ({ unit: u, lessons: unitLessons(c, u.id) })),
-    { unit: null, lessons: unitLessons(c, null) },
+    ...c.units.map((u) => ({ unit: u, lessons: libLessons(c, u.id) })),
+    { unit: null, lessons: libLessons(c, null) },
   ].filter((g) => (g.unit && (c.isOwner || g.lessons.length)) || (!g.unit && g.lessons.length));
   const whenShort = (l) => {
     const p = c.placed.get(l.id);
     if (p && p.start) return `T${p.start.term} Wk ${p.start.week}`;
     return isPlaced(l) ? `Term ${l.term}` : c.isOwner ? 'Not planned' : '';
   };
+  const canDrag = c.isOwner && !c.preview;
+  const grip = (kind, id, name) => (canDrag ? html`<button type="button" class="lib-grip" data-drag="${kind}" data-id="${id}"
+    aria-label="Move ${name}" title="Drag to move, or use the arrow keys">⋮⋮</button>` : '');
   const side = html`
-    <aside class="lib-side" aria-label="Units and lessons">
+    <aside class="lib-side ${c.libFilter && c.libFilter.trim() ? 'filtering' : ''}" aria-label="Units and lessons">
       ${c.isOwner ? html`
         <div class="lib-actions">
           <button class="btn primary small" data-action="new-lesson">New lesson</button>
@@ -841,6 +863,7 @@ function libraryPanel(c) {
                 <button class="btn small ghost" type="button" data-action="cancel-rename">Cancel</button></div>
               </form>` : html`
               <div class="lib-unit-head">
+                ${g.unit ? grip('unit', id, `the unit ${name}`) : ''}
                 <h3><button class="lib-toggle" data-action="toggle-unit" data-unit="${id}" aria-expanded="${open}">${name}</button></h3>
                 <span class="lib-count" aria-label="${plural(g.lessons.length, 'lesson')}">${g.lessons.length}</span>
                 ${c.isOwner && g.unit ? html`
@@ -848,13 +871,15 @@ function libraryPanel(c) {
                   <button class="icon-btn" data-action="rename-unit" data-unit="${id}" aria-label="Rename ${name}" title="Rename">✎</button>
                   <button class="icon-btn danger" data-action="delete-unit" data-unit="${id}" aria-label="Delete the unit ${name}" title="Delete unit">✕</button>` : ''}
               </div>`}
-            ${g.lessons.length ? html`<ul class="lib-lessons" ${raw(open ? '' : 'hidden')}>${g.lessons.map((l) => html`
-              <li data-title="${l.title.toLowerCase()}">
+            ${g.lessons.length || canDrag ? html`<ul class="lib-lessons" ${raw(open ? '' : 'hidden')}>${g.lessons.map((l) => html`
+              <li data-title="${l.title.toLowerCase()}" data-id="${l.id}">
+                ${grip('lesson', l.id, l.title)}
                 <a href="${lessonUrl(c, l.id)}" class="${l.id === c.lessonId ? 'on' : ''} ${isPlaced(l) ? '' : 'unplaced'}" ${raw(l.id === c.lessonId ? 'aria-current="page"' : '')}>
                   <span class="lib-title">${isAssessmentLike(l) ? '★ ' : ''}${l.title}</span>
                   <span class="lib-when">${whenShort(l)}</span>
                 </a>
-              </li>`)}</ul>` : html`<p class="lib-empty">No lessons yet</p>`}
+              </li>`)}</ul>` : ''}
+            ${g.lessons.length ? '' : html`<p class="lib-empty">${canDrag ? 'No lessons yet. Drag one here.' : 'No lessons yet'}</p>`}
           </section>`;
       })}
       ${!groups.length ? html`<p class="lib-empty">${c.isOwner ? 'Make a unit, then add lessons to it.' : 'No lessons yet.'}</p>` : ''}
@@ -875,6 +900,7 @@ function libraryPanel(c) {
 // Hides sidebar lessons that don't match the "Find a lesson" box (no redraw, so typing isn't interrupted).
 function applyLibFilter() {
   const q = (state.cls.libFilter || '').trim().toLowerCase();
+  document.querySelector('.lib-side')?.classList.toggle('filtering', !!q); // no dragging while filtered
   document.querySelectorAll('.lib-unit').forEach((sec) => {
     const unitHit = q && sec.dataset.name.includes(q);
     let shown = 0;
@@ -2244,7 +2270,7 @@ $app.addEventListener('submit', async (ev) => {
   } else if (kind === 'new-unit') {
     const name = form.name.value.trim().slice(0, 80);
     if (!name) return;
-    const unit = { id: store.newUnitId(c.id), name, order: c.units.length ? Math.max(...c.units.map((u) => u.order ?? 0)) + 1 : 0 };
+    const unit = { id: store.newUnitId(c.id), name, order: c.units.length ? Math.max(...c.units.map((u) => u.order ?? 0)) + 1 : 0, colour: freeUnitColour(c) };
     c.units.push(unit);
     c.addingUnit = false;
     renderPanel();
@@ -2480,6 +2506,199 @@ $app.addEventListener('drop', async (ev) => {
   const ids = dragIds;
   const idx = termLessons(state.cls).findIndex((l) => l.id === t.li.dataset.id);
   await reorder(ids, t.after ? idx + 1 : idx);
+});
+
+/* ---------- drag to reorder in the Lessons tab: lessons and whole units (mouse, pen and touch) ---------- */
+
+// Pointer events rather than HTML drag and drop, which phones don't do. Only the ⋮⋮ grip starts a drag
+// (it has touch-action: none), so the list still scrolls normally under a finger everywhere else.
+// The real row moves through the list as you drag; letting go reads the new order off the page and saves it.
+
+// Saves whatever order the sidebar now shows: unit order, and each lesson's place and unit.
+async function saveLibraryOrder() {
+  const c = state.cls;
+  const side = document.querySelector('.lib-side');
+  if (!c || !side) return;
+  const colours = new Map(c.units.map((u) => [u.id, unitColourIndex(c, u)])); // colours stay put
+  const units = [...side.querySelectorAll('.lib-unit')].map((s) => unitById(s.dataset.unit)).filter(Boolean);
+  c.units.forEach((u) => { if (!units.includes(u)) units.push(u); });
+  const unitChanges = [];
+  units.forEach((u, i) => {
+    const colour = colours.get(u.id);
+    if (u.order !== i || u.colour !== colour) { u.order = i; u.colour = colour; unitChanges.push(u); }
+  });
+  const unitsMoved = units.some((u, i) => u !== c.units[i]);
+  c.units = units;
+  const lessonChanges = [];
+  let n = 0;
+  side.querySelectorAll('.lib-unit').forEach((sec) => {
+    const unitId = sec.dataset.unit || null;
+    sec.querySelectorAll('.lib-lessons li[data-id]').forEach((li) => {
+      const l = lessonById(li.dataset.id);
+      if (!l) return;
+      const libOrder = n++;
+      const moved = unitIdOf(c, l) !== unitId;
+      if (l.libOrder !== libOrder || moved) {
+        l.libOrder = libOrder;
+        if (moved) l.unitId = unitId;
+        lessonChanges.push({ l, moved });
+      }
+    });
+  });
+  if (!unitChanges.length && !lessonChanges.length) return;
+  const keep = side.scrollTop;
+  recompute();
+  renderPanel();
+  const again = document.querySelector('.lib-side');
+  if (again) again.scrollTop = keep;
+  const into = lessonChanges.find((x) => x.moved);
+  const msg = into ? `Moved to ${into.l.unitId ? unitById(into.l.unitId).name : 'No unit'}`
+    : unitsMoved ? 'Unit order saved' : 'Order saved';
+  await saving(store.saveLibrary(c.id, {
+    units: unitChanges.map((u) => ({ id: u.id, order: u.order, colour: u.colour })),
+    lessons: lessonChanges.map(({ l }) => ({ id: l.id, libOrder: l.libOrder, unitId: l.unitId ?? null })),
+  }), msg);
+}
+
+let libDrag = null;
+
+$app.addEventListener('pointerdown', (ev) => {
+  const grip = ev.target.closest && ev.target.closest('.lib-grip');
+  if (!grip || ev.button > 0 || libDrag || grip.closest('.filtering')) return;
+  const unit = grip.dataset.drag === 'unit';
+  const el = grip.closest(unit ? '.lib-unit' : 'li');
+  if (!el) return;
+  ev.preventDefault();
+  grip.setPointerCapture(ev.pointerId);
+  libDrag = { unit, el, grip, pointer: ev.pointerId, x0: ev.clientX, y0: ev.clientY, x: ev.clientX, y: ev.clientY, on: false };
+});
+
+function startLibDrag(d) {
+  d.on = true;
+  const side = d.el.closest('.lib-side');
+  d.side = side;
+  const pic = d.unit ? d.el.querySelector('.lib-unit-head') : d.el;
+  const box = pic.getBoundingClientRect();
+  d.dy = d.y0 - box.top; // the picture keeps the same grip point under the pointer
+  if (d.unit) {
+    // Units fold up to their headings while you move one; scroll so the heading stays near the pointer.
+    side.classList.add('sorting-units');
+    const shift = d.el.getBoundingClientRect().top - box.top;
+    const scrolls = side.scrollHeight > side.clientHeight + 1 && getComputedStyle(side).overflowY !== 'visible';
+    if (scrolls) side.scrollTop += shift; else window.scrollBy(0, shift);
+  }
+  // The picture that follows the pointer. A lesson goes in its own list so it keeps the sidebar's look.
+  d.ghost = d.unit ? pic.cloneNode(true) : document.createElement('ul');
+  if (d.unit) d.ghost.style.setProperty('--unit', getComputedStyle(d.el).getPropertyValue('--unit'));
+  else { d.ghost.className = 'lib-lessons'; d.ghost.append(pic.cloneNode(true)); }
+  d.ghost.classList.add('lib-ghost');
+  Object.assign(d.ghost.style, { left: `${box.left}px`, top: `${d.y - d.dy}px`, width: `${box.width}px` });
+  document.body.append(d.ghost);
+  d.el.classList.add('lib-drag-src');
+  document.body.classList.add('lib-dragging');
+  const tick = () => {
+    if (libDrag !== d) return;
+    autoScroll(d);
+    d.frame = requestAnimationFrame(tick);
+  };
+  d.frame = requestAnimationFrame(tick);
+}
+
+// Moves the dragged row to wherever the pointer is.
+function placeLibDrag(d) {
+  d.ghost.style.top = `${d.y - d.dy}px`;
+  const under = document.elementFromPoint(d.x, d.y);
+  const sec = under && under.closest('.lib-unit');
+  document.querySelectorAll('.lib-unit.drop-into').forEach((s) => s.classList.remove('drop-into'));
+  if (!sec || !d.side.contains(sec)) return;
+  const below = (el) => d.y > el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2;
+  if (d.unit) {
+    if (sec === d.el) return;
+    // "No unit" always stays last.
+    if (!sec.dataset.unit) sec.before(d.el);
+    else if (below(sec)) sec.after(d.el); else sec.before(d.el);
+    return;
+  }
+  const li = under.closest('.lib-lessons li');
+  if (li === d.el) return;
+  if (li) {
+    if (below(li)) li.after(d.el); else li.before(d.el);
+  } else {
+    const ul = sec.querySelector('.lib-lessons');
+    if (!ul) return; // "No unit" isn't shown until it has lessons
+    if (!ul.contains(d.el)) ul.append(d.el); // dropped on a unit's heading: goes to the end of that unit
+  }
+  if (sec.querySelector('.lib-lessons').hidden) sec.classList.add('drop-into'); // folded unit: show where it went
+}
+
+// Near the top or bottom edge, scroll the sidebar (laptop) or the page (phone).
+function autoScroll(d) {
+  const side = d.side;
+  const scrolls = side.scrollHeight > side.clientHeight + 1 && getComputedStyle(side).overflowY !== 'visible';
+  const top = scrolls ? Math.max(side.getBoundingClientRect().top, 0) : 0;
+  const bottom = scrolls ? Math.min(side.getBoundingClientRect().bottom, innerHeight) : innerHeight;
+  const edge = 56;
+  let step = 0;
+  if (d.y < top + edge) step = -Math.ceil((top + edge - d.y) / 4);
+  else if (d.y > bottom - edge) step = Math.ceil((d.y - (bottom - edge)) / 4);
+  if (!step) return;
+  step = Math.max(-24, Math.min(24, step));
+  if (scrolls) side.scrollTop += step; else window.scrollBy(0, step);
+  placeLibDrag(d);
+}
+
+$app.addEventListener('pointermove', (ev) => {
+  const d = libDrag;
+  if (!d || ev.pointerId !== d.pointer) return;
+  d.x = ev.clientX;
+  d.y = ev.clientY;
+  if (!d.on) {
+    if (Math.hypot(d.x - d.x0, d.y - d.y0) < 5) return;
+    startLibDrag(d);
+  }
+  placeLibDrag(d);
+});
+
+function endLibDrag(save) {
+  const d = libDrag;
+  libDrag = null;
+  if (!d || !d.on) return;
+  cancelAnimationFrame(d.frame);
+  d.ghost.remove();
+  document.body.classList.remove('lib-dragging');
+  if (save) saveLibraryOrder();
+  else renderPanel(); // put everything back
+}
+$app.addEventListener('pointerup', (ev) => { if (libDrag && ev.pointerId === libDrag.pointer) endLibDrag(true); });
+$app.addEventListener('pointercancel', (ev) => { if (libDrag && ev.pointerId === libDrag.pointer) endLibDrag(false); });
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && libDrag) endLibDrag(false); });
+
+// Keyboard: ↑ and ↓ on a grip move the lesson (into the next unit at the ends) or the unit.
+$app.addEventListener('keydown', async (ev) => {
+  const grip = ev.target.closest && ev.target.closest('.lib-grip');
+  if (!grip || (ev.key !== 'ArrowUp' && ev.key !== 'ArrowDown') || grip.closest('.filtering')) return;
+  ev.preventDefault();
+  const up = ev.key === 'ArrowUp';
+  if (grip.dataset.drag === 'unit') {
+    const sec = grip.closest('.lib-unit');
+    const other = up ? sec.previousElementSibling : sec.nextElementSibling;
+    if (!other || !other.classList.contains('lib-unit') || !other.dataset.unit) return;
+    if (up) other.before(sec); else other.after(sec);
+  } else {
+    const li = grip.closest('li');
+    const other = up ? li.previousElementSibling : li.nextElementSibling;
+    if (other) {
+      if (up) other.before(li); else other.after(li);
+    } else {
+      const secs = [...document.querySelectorAll('.lib-side .lib-unit')].filter((s) => s.querySelector('.lib-lessons'));
+      const next = secs[secs.indexOf(li.closest('.lib-unit')) + (up ? -1 : 1)];
+      if (!next) return;
+      const ul = next.querySelector('.lib-lessons');
+      if (up) ul.append(li); else ul.prepend(li);
+    }
+  }
+  await saveLibraryOrder();
+  document.querySelector(`.lib-grip[data-drag="${grip.dataset.drag}"][data-id="${grip.dataset.id}"]`)?.focus();
 });
 
 /* ---------- start ---------- */

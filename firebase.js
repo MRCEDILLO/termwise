@@ -219,6 +219,19 @@ export function createFirebaseStore(config) {
       await b.commit();
     },
 
+    // The Lessons tab's order: unit order and colour, each lesson's place and unit. Batches top out at 500 writes.
+    async saveLibrary(id, { units = [], lessons = [] }) {
+      const writes = [
+        ...units.map((u) => [doc(db, 'classes', id, 'units', u.id), { order: u.order, colour: u.colour }]),
+        ...lessons.map((l) => [doc(db, 'classes', id, 'lessons', l.id), { libOrder: l.libOrder, unitId: l.unitId }]),
+      ];
+      for (let i = 0; i < writes.length; i += 450) {
+        const b = writeBatch(db);
+        writes.slice(i, i + 450).forEach(([ref, data]) => b.update(ref, data));
+        await b.commit();
+      }
+    },
+
     /* ---------- announcements ---------- */
 
     async getAnnouncements(id) {

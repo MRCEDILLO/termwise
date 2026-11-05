@@ -104,6 +104,20 @@ test('teacher creates a class, a student joins, the key is regenerated, the clas
   assert.equal((await student.getClass(id)).contact, 'gabe@example.com');
   assert.deepEqual((await student.getAnnouncements(id)).map((x) => x.text), ['Welcome!']);
   await assert.rejects(student.addAnnouncement(id, 'No homework!'));
+  // Dragging in the Lessons tab: a second unit goes first and a lesson moves into it; the student sees it.
+  const unit2 = { id: teacher.newUnitId(id), name: 'Fractions', order: 1, colour: 1 };
+  await teacher.saveUnit(id, unit2);
+  await teacher.saveLibrary(id, {
+    units: [{ id: unit2.id, order: 0, colour: 1 }, { id: unit.id, order: 1, colour: 0 }],
+    lessons: [{ id: spare.id, libOrder: 0, unitId: unit2.id }],
+  });
+  assert.deepEqual((await student.getUnits(id)).map((u) => [u.name, u.colour]), [['Fractions', 1], ['Integers', 0]]);
+  const moved = (await student.getLessons(id)).find((l) => l.id === spare.id);
+  assert.equal(moved.unitId, unit2.id);
+  assert.equal(moved.libOrder, 0);
+  assert.equal(moved.order, 2); // the planner's order is untouched
+  await assert.rejects(student.saveLibrary(id, { lessons: [{ id: spare.id, libOrder: 5, unitId: null }] }));
+  await teacher.deleteUnit(id, unit2.id, [spare.id]);
   await teacher.deleteUnit(id, unit.id, [spare.id]);
   assert.equal((await teacher.getLessons(id)).find((l) => l.id === spare.id).unitId, null);
   await teacher.deleteAnnouncement(id, post.id);

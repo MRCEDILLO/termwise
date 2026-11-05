@@ -255,6 +255,14 @@ export function createDemoStore() {
       persist();
     },
 
+    async saveLibrary(id, { units = [], lessons = [] }) {
+      const u = new Map(units.map((x) => [x.id, x]));
+      const l = new Map(lessons.map((x) => [x.id, x]));
+      (data.units[id] || []).forEach((x) => { if (u.has(x.id)) Object.assign(x, { order: u.get(x.id).order, colour: u.get(x.id).colour }); });
+      (data.lessons[id] || []).forEach((x) => { if (l.has(x.id)) Object.assign(x, { libOrder: l.get(x.id).libOrder, unitId: l.get(x.id).unitId }); });
+      persist();
+    },
+
     async getAnnouncements(id) {
       return structuredClone((data.announcements[id] || []).slice().sort((a, b) => b.createdAt - a.createdAt));
     },
