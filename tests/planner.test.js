@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  schedule, emptyPlan, currentWeek, cellText, isAssessmentLike, isRevisionLike, lessonKind, termMonday, slotDate,
+  schedule, emptyPlan, currentWeek, cellText, isAssessmentLike, isRevisionLike, lessonKind, termMonday, slotDate, daySessions,
 } from '../planner.js';
 
 // Mon P1, Wed P3, Fri P5: 3 meetings a week.
@@ -149,3 +149,19 @@ function emptyPlanNoDates() {
   p.terms = p.terms.map(() => ({ start: '', weeks: 10 }));
   return p;
 }
+
+test('daySessions lists one day in period order, joining back-to-back periods', () => {
+  const plan = emptyPlan();
+  plan.terms = [{ start: '2027-02-01', weeks: 2 }, { start: '', weeks: 0 }, { start: '', weeks: 0 }, { start: '', weeks: 0 }];
+  plan.pattern = ['1-2', '1-3', '1-5', '2-1', '2-4', '2-5'];
+  plan.events = [{ id: 'e', term: 1, week: 1, day: 2, period: 'All', label: 'Camp' }];
+  const r = schedule(plan, [L('A', 3), L('B', 2)]);
+  // Monday 1 Feb: A takes P2–3 and P5.
+  assert.deepEqual(daySessions(r, '2027-02-01').map((s) => [s.from, s.to, s.lesson && s.lesson.title]), [[2, 3, 'A'], [5, 5, 'A']]);
+  // Tuesday 2 Feb: camp all day; P4 and P5 run together.
+  assert.deepEqual(daySessions(r, '2027-02-02').map((s) => [s.from, s.to, s.blocked, s.label]), [[1, 1, true, 'Camp'], [4, 5, true, 'Camp']]);
+  // Monday 8 Feb: B for two periods, then nothing left to teach.
+  assert.deepEqual(daySessions(r, '2027-02-08').map((s) => [s.from, s.to, s.lesson.title]), [[2, 3, 'B']]);
+  assert.deepEqual(daySessions(r, '2027-02-06'), [], 'a Saturday has nothing');
+  assert.deepEqual(daySessions(null, '2027-02-01'), []);
+});

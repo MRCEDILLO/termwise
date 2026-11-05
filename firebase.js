@@ -7,7 +7,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
   getFirestore, doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc,
-  writeBatch, query, where, orderBy, limit, serverTimestamp, Timestamp, deleteField,
+  writeBatch, query, where, orderBy, limit, serverTimestamp, Timestamp, deleteField, onSnapshot,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import {
   getStorage, ref, uploadBytes, uploadBytesResumable, getBytes, getDownloadURL, deleteObject, getMetadata, updateMetadata,
@@ -325,7 +325,19 @@ export function createFirebaseStore(config) {
     // Returns counts, plus the names of any files that couldn't be copied.
     async copyFromTemplate(fromId, toId, onProgress = () => {}) {
       const [units, lessons, files] = await Promise.all([this.getUnits(fromId), this.getLessons(fromId), this.listFiles(fromId)]);
-      const copy = templateCopy({ units, lessons, files }, (kind) => doc(collection(db, 'classes', toId, `${kind}s`)).id);
+      const copy = templateCopy({ units, lessons, files }, (kind) => this.newId(toId, kind));
+      return this.copyInto(fromId, toId, copy, onProgress);
+    },
+
+    // A fresh id in the class for a 'unit', 'lesson' or 'file'.
+    newId(classId, kind) {
+      return doc(collection(db, 'classes', classId, `${kind}s`)).id;
+    },
+
+    // Writes a copy made by template.js (templateCopy or copyToClass) into class toId: the units
+    // and lessons, then each file's bytes from class fromId. Returns counts, plus the names of
+    // any files that couldn't be copied.
+    async copyInto(fromId, toId, copy, onProgress = () => {}) {
       const writes = [
         ...copy.units.map(({ id, ...data }) => [doc(db, 'classes', toId, 'units', id), data]),
         ...copy.lessons.map(({ id, ...data }) => [doc(db, 'classes', toId, 'lessons', id), data]),
@@ -353,6 +365,42 @@ export function createFirebaseStore(config) {
         onProgress(++done, copy.files.length);
       }
       return { units: copy.units.length, lessons: copy.lessons.length, files: copy.files.length - failed.length, failed };
+    },
+
+    /* ---------- live updates ---------- */
+
+    // Calls onChange(kind, data) whenever the class changes on the server, so an open page stays
+    // current: kind is 'class', 'plan', 'lessons', 'units', 'files' or 'posts', with the same shape
+    // the get functions return, or 'gone' when the class can't be read any more (key changed,
+    // archived, deleted). Snapshots holding this browser's own unsaved writes are skipped: the
+    // page already shows those, and the next snapshot brings the saved version.
+    // Returns a function that stops listening.
+    watchClass(id, onChange) {
+      const opts = { includeMetadataChanges: true };
+      const offs = [];
+      let gone = false;
+      const fail = (e) => {
+        console.error(e);
+        if (!gone && e && e.code === 'permission-denied') { gone = true; onChange('gone'); }
+      };
+      const listen = (target, kind, map) => offs.push(onSnapshot(target, opts, (snap) => {
+        if (gone || snap.metadata.hasPendingWrites) return;
+        const data = map(snap);
+        if (data !== undefined && !gone) onChange(kind, data);
+      }, fail));
+      listen(doc(db, 'classes', id), 'class', (snap) => {
+        if (!snap.exists()) { gone = true; onChange('gone'); return undefined; }
+        return { id, ...snap.data() };
+      });
+      listen(doc(db, 'classes', id, 'plan', 'main'), 'plan', (snap) => (snap.exists() ? { ...emptyPlan(), ...snap.data() } : emptyPlan()));
+      listen(query(collection(db, 'classes', id, 'lessons'), orderBy('order')), 'lessons', (snap) => snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      listen(query(collection(db, 'classes', id, 'units'), orderBy('order')), 'units', (snap) => snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      listen(collection(db, 'classes', id, 'files'), 'files', (snap) => snap.docs.map(fileFromDoc));
+      listen(query(collection(db, 'classes', id, 'announcements'), orderBy('createdAt', 'desc'), limit(50)), 'posts', (snap) => snap.docs.map((d) => {
+        const data = d.data();
+        return { id: d.id, text: data.text, createdAt: data.createdAt ? data.createdAt.toMillis() : Date.now() };
+      }));
+      return () => offs.forEach((off) => off());
     },
 
     /* ---------- tracker: owner only (the rules refuse everyone else) ---------- */

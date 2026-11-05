@@ -259,3 +259,22 @@ export function cellText(slot, lessons) {
   const lesson = lessons[slot.lessonIndex];
   return slot.of > 1 ? `${lesson.title} (${slot.part}/${slot.of})` : lesson.title;
 }
+
+// One day's class periods from a schedule() result, in period order, for a 'YYYY-MM-DD' date.
+// Back-to-back periods of the same lesson are joined (P2–3). Blocked periods come back as
+// { blocked: true, label }; free periods with no lesson are left out.
+//   [{ from, to, blocked, label, lesson }]   lesson is the scheduled lesson, or null when blocked
+export function daySessions(result, dateISO) {
+  const out = [];
+  if (!result || !dateISO) return out;
+  const slots = result.slots.filter((s) => s.date === dateISO && (s.blocked || s.lessonIndex !== null))
+    .sort((a, b) => a.period - b.period);
+  for (const s of slots) {
+    const last = out[out.length - 1];
+    const lesson = s.blocked ? null : result.lessons[s.lessonIndex];
+    if (last && !s.blocked && last.lesson === lesson && last.to === s.period - 1) { last.to = s.period; continue; }
+    if (last && s.blocked && last.blocked && last.label === s.label && last.to === s.period - 1) { last.to = s.period; continue; }
+    out.push({ from: s.period, to: s.period, blocked: s.blocked, label: s.label, lesson });
+  }
+  return out;
+}
