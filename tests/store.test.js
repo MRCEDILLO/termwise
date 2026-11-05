@@ -245,6 +245,55 @@ test('a new class copies lessons, units, planner placement and files from a temp
   assert.equal(open.name, 'Sheet.pdf');
 });
 
+test("another teacher copies a class by its key: their own copy, files included, and no lasting access", async () => {
+  const run = Date.now();
+  const gabe = createFirebaseStore(config(`ik${run}`, { sub: `ikg${run}`, email: 'gabe@example.com', email_verified: true, name: 'Gabe' }));
+  await gabe.signInTeacher();
+  await waitForUser(gabe);
+  const src = await gabe.createClass({ name: '9C Science', subject: 'Science', year: '2026', colour: 1 });
+  const unit = { id: gabe.newUnitId(src), name: 'Cells', order: 0 };
+  await gabe.saveUnit(src, unit);
+  const l1 = { id: gabe.newLessonId(src), title: 'Microscopes', description: '', unitId: unit.id, periods: 1, assessment: false, homework: false, term: 1, order: 0, libOrder: 0 };
+  await gabe.saveLesson(src, l1);
+  const pdf = (name) => new File([new Uint8Array([37, 80, 68, 70])], name);
+  await gabe.uploadFile(src, l1.id, pdf('Worksheet.pdf'));
+  await gabe.uploadFile(src, l1.id, pdf('Answers.pdf'), { locked: true });
+  await gabe.saveStudents(src, [{ id: gabe.newStudentId(src), name: 'Sam' }]);
+  const key = (await gabe.getClass(src)).currentKey;
+
+  const other = createFirebaseStore(config(`iko${run}`, { sub: `iko${run}`, email: 'o@example.com', email_verified: true, name: 'Other' }));
+  await other.signInTeacher();
+  await waitForUser(other);
+  assert.equal(await other.startImport('ZZZZZZZZ'), null, 'a key nobody uses finds nothing');
+  const found = await other.startImport(key);
+  assert.deepEqual(found, { classId: src, name: '9C Science', own: false });
+  const id = await other.createClass({ name: '9D Science', subject: 'Science', year: '2026', colour: 0 });
+  const res = await other.copyFromTemplate(src, id);
+  assert.deepEqual(res, { units: 1, lessons: 1, files: 2, failed: [] });
+  await other.endImport(src);
+
+  // The copy belongs to the other teacher, with its own ids, and both files really copied.
+  const lessons = await other.getLessons(id);
+  assert.deepEqual(lessons.map((l) => [l.title, l.term]), [['Microscopes', 1]]);
+  assert.notEqual(lessons[0].id, l1.id);
+  const files = await other.listFiles(id);
+  assert.deepEqual(files.map((f) => [f.name, f.locked]).sort(), [['Answers.pdf', true], ['Worksheet.pdf', false]]);
+  for (const f of files) assert.ok(await other.fileUrl(id, f));
+  assert.equal(await gabe.getClass(id), null, "the original teacher can't see the copy");
+
+  // Editing the copy leaves the original alone.
+  await other.saveLesson(id, { ...lessons[0], title: 'Microscopes (mine)' });
+  assert.equal((await gabe.getLessons(src))[0].title, 'Microscopes');
+
+  // Once the copy is done, the other teacher can't read the original any more, and never saw its students.
+  assert.equal(await other.getClass(src), null);
+  await assert.rejects(other.getLessons(src));
+  await assert.rejects(other.getStudents(src));
+
+  // A teacher's own key just points at their own class, with no import record.
+  assert.deepEqual(await gabe.startImport(key), { classId: src, name: '9C Science', own: true });
+});
+
 // Waits until onChange has been called with a kind and data that pass the check.
 function waitFor(events, check, ms = 8000) {
   return new Promise((resolve, reject) => {

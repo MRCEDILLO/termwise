@@ -436,14 +436,20 @@ function newClassDialog(classes = []) {
     <dialog id="new-class">
       <form data-form="new-class" method="dialog">
         <h2>New class</h2>
-        ${classes.length ? html`
-          <label>Start from
-            <select name="template">
-              <option value="">A blank class</option>
-              ${classes.map((c) => html`<option value="${c.id}">Copy of ${c.name}${c.archived ? ' (archived)' : ''}</option>`)}
-            </select>
-          </label>
-          <p class="hint">A copy brings across the lessons, units, lesson files and where each lesson sits on the planner. Students, marks, announcements, term dates and the timetable are not copied.</p>` : ''}
+        <label>Start from
+          <select name="template">
+            <option value="">A blank class</option>
+            ${classes.map((c) => html`<option value="${c.id}">Copy of ${c.name}${c.archived ? ' (archived)' : ''}</option>`)}
+            <option value="key">Copy another teacher's class, using its key</option>
+          </select>
+        </label>
+        <label class="import-key" hidden>Their class key
+          <input name="importKey" autocomplete="off" autocapitalize="characters" spellcheck="false"
+            placeholder="ABCD-2345" maxlength="12">
+        </label>
+        <p class="hint" data-from-hint="copy" ${raw(classes.length ? '' : 'hidden')}>A copy brings across the lessons, units, lesson files and where each lesson sits on the planner. Students, marks, announcements, term dates and the timetable are not copied.</p>
+        <p class="hint" data-from-hint="key" hidden>Ask the other teacher for their class key (the one their students join with). You get your own copy of their lessons, units, lesson files and planner, teacher-only files included. It's yours alone to change: nothing you do touches their class, and their later changes don't reach yours.</p>
+        <p class="form-msg" aria-live="polite"></p>
         <label>Class name <input name="name" required maxlength="80" placeholder="8A Maths"></label>
         <div class="row2">
           <label>Subject <input name="subject" maxlength="80" placeholder="Maths"></label>
@@ -2572,8 +2578,31 @@ $app.addEventListener('submit', async (ev) => {
       colour: Number(form.colour.value) || 0,
     };
     if (!data.name) return;
-    const template = form.template ? form.template.value : '';
+    let template = form.template ? form.template.value : '';
     const btn = form.querySelector('button[type=submit]');
+    const msg = form.querySelector('.form-msg');
+    msg.textContent = '';
+    // Another teacher's class: find it by key before making anything, so a wrong key leaves no
+    // empty class behind.
+    let source = null;
+    if (template === 'key') {
+      const key = normaliseKey(form.importKey.value);
+      if (!key) { msg.textContent = 'Type the class key, like ABCD-2345.'; form.importKey.focus(); return; }
+      btn.disabled = true;
+      btn.textContent = 'Finding the class…';
+      try {
+        source = await store.startImport(key);
+      } catch (e) {
+        console.error(e);
+      }
+      if (!source) {
+        btn.disabled = false;
+        btn.textContent = 'Create class';
+        msg.textContent = "No class has that key. Check it with the teacher: a new key or an archived class stops the old one working.";
+        return;
+      }
+      template = source.classId;
+    }
     btn.disabled = true;
     let id;
     try {
@@ -2581,6 +2610,8 @@ $app.addEventListener('submit', async (ev) => {
     } catch (e) {
       console.error(e);
       btn.disabled = false;
+      btn.textContent = 'Create class';
+      if (source && !source.own) store.endImport(source.classId);
       toast("Couldn't create the class. Try again.", 'error');
       return;
     }
@@ -2593,12 +2624,14 @@ $app.addEventListener('submit', async (ev) => {
         if (res.failed.length) {
           toast(`Class made, but ${plural(res.failed.length, 'file')} couldn't be copied: ${res.failed.join(', ')}. Upload ${res.failed.length === 1 ? 'it' : 'them'} again on the Lessons tab.`, 'error');
         } else {
-          toast(`Copied ${plural(res.lessons, 'lesson')}${res.units ? `, ${plural(res.units, 'unit')}` : ''}${res.files ? ` and ${plural(res.files, 'file')}` : ''}`);
+          toast(`Copied ${plural(res.lessons, 'lesson')}${res.units ? `, ${plural(res.units, 'unit')}` : ''}${res.files ? ` and ${plural(res.files, 'file')}` : ''}${source && source.name ? ` from ${source.name}` : ''}`);
         }
       } catch (e) {
         console.error(e);
         toast("The class was made, but copying the lessons didn't finish. Check the Lessons tab.", 'error');
       }
+      // The copy is done, so stop being able to read the other teacher's class.
+      if (source && !source.own) await store.endImport(source.classId);
     }
     form.closest('dialog').close();
     location.hash = `#/class/${id}/setup`;
@@ -2738,6 +2771,17 @@ $app.addEventListener('submit', async (ev) => {
 $app.addEventListener('change', async (ev) => {
   const el = ev.target;
   const c = state.cls;
+  if (el.name === 'template' && el.form && el.form.dataset.form === 'new-class') {
+    const byKey = el.value === 'key';
+    const f = el.form;
+    f.querySelector('.import-key').hidden = !byKey;
+    f.importKey.required = byKey;
+    f.querySelector('[data-from-hint=key]').hidden = !byKey;
+    f.querySelector('[data-from-hint=copy]').hidden = byKey || el.options.length <= 2; // no classes of their own
+    f.querySelector('.form-msg').textContent = '';
+    if (byKey) f.importKey.focus();
+    return;
+  }
   if (c && el.dataset.upload) { await uploadFiles(el); return; }
   if (c && el.dataset.mark) { await saveMark(el); return; }
   if (c && el.dataset.max) {

@@ -26,16 +26,9 @@ service firebase.storage {
       return isTeacher() && classData(classId).owner == request.auth.uid;
     }
 
-    function isMember(classId) {
-      let c = classData(classId);
-      let m = /databases/(default)/documents/classes/$(classId)/members/$(request.auth.uid);
-      return request.auth != null && c.archived == false
-        && firestore.exists(m) && firestore.get(m).data.key == c.currentKey;
-    }
-
     // Is the file open to students? The lock settings are read from the file's own metadata
     // (written by the app alongside the Firestore record), not from Firestore: Storage rules may
-    // look at no more than two Firestore documents per request, and isMember already uses two
+    // look at no more than two Firestore documents per request, and canOpen already uses two
     // (the class and the student's membership). A third lookup makes Firebase refuse every
     // student. A file with no settings on it counts as locked until the teacher's app adds them.
     function isOpen() {
@@ -52,8 +45,28 @@ service firebase.storage {
         && request.resource.contentType.matches('application/pdf|application/vnd[.]openxmlformats-officedocument[.](presentationml[.]presentation|wordprocessingml[.]document)|image/(png|jpeg|gif|webp)');
     }
 
+    // Who may open a file. Written so that each kind of reader costs at most two Firestore
+    // documents (the limit above): the class's teacher (class + teacher list), another teacher
+    // copying the class with its key (class + their importers record) and a student (class +
+    // membership). An importer may open every file, teacher-only ones too, because a copy of a
+    // class brings those across. The importers record can only be written by someone on the
+    // teacher list (firestore.rules), so the list isn't read again here.
+    function canOpen(classId) {
+      let c = classData(classId);
+      let uid = request.auth.uid;
+      let imp = /databases/(default)/documents/classes/$(classId)/importers/$(uid);
+      let m = /databases/(default)/documents/classes/$(classId)/members/$(uid);
+      return (c.owner == uid && isTeacher())
+        || (c.owner != uid && c.archived == false
+            && request.auth.token.firebase.sign_in_provider == 'google.com'
+            && request.auth.token.email_verified == true
+            && firestore.exists(imp) && firestore.get(imp).data.key == c.currentKey)
+        || (c.owner != uid && c.archived == false
+            && firestore.exists(m) && firestore.get(m).data.key == c.currentKey && isOpen());
+    }
+
     match /classes/{classId}/files/{fileId}/{fileName} {
-      allow read: if isOwner(classId) || (isMember(classId) && isOpen());
+      allow read: if request.auth != null && canOpen(classId);
       allow create, update: if isOwner(classId) && allowedUpload();
       allow delete: if isOwner(classId);
     }

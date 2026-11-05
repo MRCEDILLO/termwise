@@ -308,3 +308,58 @@ test('nobody else can see or change the list, but a teacher can check their own 
   // A look-alike of the admin's address is just another account.
   await assertFails(getDocs(collection(google('fake', 'gabrielcedillo2002@gmail.com.evil.com'), 'allowedTeachers')));
 });
+
+/* ---------- copying another teacher's class by its key ---------- */
+
+test('another teacher with the key can read the lesson library to copy it, and nothing else', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'classes/c1/units/u1'), { name: 'Algebra', order: 0 });
+    await setDoc(doc(db, 'classes/c1/files/f1'), { lessonId: 'l1', name: 'a.pdf', size: 4, type: 'application/pdf', locked: true, unlocked: false, unlockAt: null });
+    await setDoc(doc(db, 'classes/c1/announcements/p1'), { text: 'Hi', createdAt: 1 });
+  });
+  const db = teacher('other');
+  // Without recording the key first: nothing.
+  await assertFails(getDoc(doc(db, 'classes/c1')));
+  await assertFails(getDocs(collection(db, 'classes/c1/lessons')));
+  await assertSucceeds(setDoc(doc(db, 'classes/c1/importers/other'), { key: KEY, at: Date.now() }));
+  await assertSucceeds(getDoc(doc(db, 'classes/c1')));
+  await assertSucceeds(getDocs(collection(db, 'classes/c1/units')));
+  await assertSucceeds(getDocs(collection(db, 'classes/c1/lessons')));
+  await assertSucceeds(getDocs(collection(db, 'classes/c1/files')));
+  // Not the students, marks, tracker, members, plan or announcements.
+  for (const p of ['students', 'marks', 'members', 'plan', 'announcements', 'importers']) {
+    await assertFails(getDocs(collection(db, `classes/c1/${p}`)));
+  }
+  await assertFails(getDoc(doc(db, 'classes/c1/tracker/settings')));
+  // And never write to the class.
+  await assertFails(setDoc(doc(db, 'classes/c1/lessons/l9'), { title: 'x', order: 1 }));
+  await assertFails(updateDoc(doc(db, 'classes/c1'), { name: 'Mine now' }));
+  // Done copying: they remove their record and lose access.
+  await assertSucceeds(deleteDoc(doc(db, 'classes/c1/importers/other')));
+  await assertFails(getDocs(collection(db, 'classes/c1/lessons')));
+});
+
+test('only a teacher with the current key can record an import', async () => {
+  await assertFails(setDoc(doc(teacher('other'), 'classes/c1/importers/other'), { key: NEW_KEY }));
+  await assertFails(setDoc(doc(teacher('other'), 'classes/c1/importers/gabe'), { key: KEY }));
+  await assertFails(setDoc(doc(teacher('other'), 'classes/c1/importers/other'), { key: KEY, extra: 1 }));
+  await assertFails(setDoc(doc(student('s1'), 'classes/c1/importers/s1'), { key: KEY }));
+  await assertFails(setDoc(doc(google('nobody', 'nobody@example.com'), 'classes/c1/importers/nobody'), { key: KEY }));
+  await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), 'classes/c1'), { archived: true }));
+  await assertFails(setDoc(doc(teacher('other'), 'classes/c1/importers/other'), { key: KEY }));
+});
+
+test('a new key or archiving cuts off a teacher partway through copying', async () => {
+  await assertSucceeds(setDoc(doc(teacher('other'), 'classes/c1/importers/other'), { key: KEY }));
+  await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), 'classes/c1'), { currentKey: NEW_KEY }));
+  await assertFails(getDocs(collection(teacher('other'), 'classes/c1/lessons')));
+  await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), 'classes/c1'), { currentKey: KEY, archived: true }));
+  await assertFails(getDocs(collection(teacher('other'), 'classes/c1/lessons')));
+});
+
+test('the owner sees and can remove import records', async () => {
+  await assertSucceeds(setDoc(doc(teacher('other'), 'classes/c1/importers/other'), { key: KEY }));
+  await assertSucceeds(getDocs(collection(teacher('gabe'), 'classes/c1/importers')));
+  await assertSucceeds(deleteDoc(doc(teacher('gabe'), 'classes/c1/importers/other')));
+});

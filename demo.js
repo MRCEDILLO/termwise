@@ -331,6 +331,13 @@ export function createDemoStore() {
       }, () => uid());
       return this.copyInto(fromId, toId, copy, onProgress);
     },
+    // Demo mode has one teacher, so a key can only find one of their own classes.
+    async startImport(key) {
+      await tick();
+      const entry = Object.entries(data.classes).find(([, c]) => c.currentKey === key && !c.archived);
+      return entry ? { classId: entry[0], name: entry[1].name, own: entry[1].owner === user.uid } : null;
+    },
+    async endImport() {},
     newId() { return uid(); },
     async copyInto(fromId, toId, copy, onProgress = () => {}) {
       (data.units[toId] ||= []).push(...structuredClone(copy.units));

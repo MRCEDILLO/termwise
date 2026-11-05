@@ -119,6 +119,27 @@ test('a new key or archiving cuts students off from files', async () => {
   await assertFails(canRead(student('s1'), 'open'));
 });
 
+test('another teacher copying the class with its key opens every file, teacher-only ones too', async () => {
+  await assertSucceeds(setDoc(doc(teacher('other').firestore(), 'classes/c1/importers/other'), { key: KEY }));
+  for (const id of ['open', 'answers', 'future', 'legacy']) await assertSucceeds(canRead(teacher('other'), id));
+  await assertFails(uploadBytes(ref(teacher('other').storage(), path('x')), bytes, { contentType: PDF }));
+  await assertFails(deleteObject(ref(teacher('other').storage(), path('open'))));
+});
+
+test('an import record with an old key, or on an archived class, opens nothing', async () => {
+  await env.withSecurityRulesDisabled((ctx) => setDoc(doc(ctx.firestore(), 'classes/c1/importers/other'), { key: KEY }));
+  await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), 'classes/c1'), { currentKey: 'ZZ22HH77' }));
+  await assertFails(canRead(teacher('other'), 'open'));
+  await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), 'classes/c1'), { currentKey: KEY, archived: true }));
+  await assertFails(canRead(teacher('other'), 'open'));
+});
+
+test('a student cannot use an import record to open teacher-only files', async () => {
+  await env.withSecurityRulesDisabled((ctx) => setDoc(doc(ctx.firestore(), 'classes/c1/importers/s1'), { key: KEY }));
+  await assertFails(canRead(student('s1'), 'answers'));
+  await assertSucceeds(canRead(student('s1'), 'open'));
+});
+
 /* ---------- writing ---------- */
 
 test('the teacher uploads PDF, PowerPoint, Word and pictures', async () => {
