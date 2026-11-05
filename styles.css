@@ -152,6 +152,35 @@ legend { font-weight: 700; font-size: .92rem; color: var(--ink-2); margin-bottom
 .class-card-foot { padding: 12px 16px; color: var(--ink-2); font-size: .9rem; min-height: 46px; }
 .class-card.archived .class-card-banner { filter: grayscale(.7); opacity: .8; }
 
+/* The teacher's class list: pinned classes, a line, then the rest. Cards move by their ⋮⋮ grip. */
+.class-tile { position: relative; display: flex; flex-direction: column; }
+.class-tile > .class-card { flex: 1 1 auto; }
+.class-tools { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; }
+.class-tool {
+  display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px;
+  background: rgba(255, 255, 255, .2); color: #fff; font: 800 .9rem/1 var(--font-body); cursor: pointer;
+  opacity: 0; transition: opacity .15s, background .15s;
+}
+.class-grip { letter-spacing: -3px; padding-left: 1px; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.class-tile:hover .class-tool, .class-tool:focus-visible, .class-tile.pinned .class-pin { opacity: 1; }
+.class-tool:hover, .class-tool:focus-visible { background: rgba(255, 255, 255, .34); }
+.class-pin[aria-pressed="true"] { background: #fff; color: var(--ink); }
+.class-pin[aria-pressed="true"] svg { fill: currentColor; }
+@media (hover: none), (pointer: coarse) { .class-tool { opacity: 1; width: 38px; height: 38px; } }
+.pin-line { display: none; border: 0; border-top: 2px solid var(--line); margin: 24px 0; }
+#class-list.has-pins .pin-line, #class-list.dragging .pin-line { display: block; }
+#class-list .class-grid.is-empty { display: none; }
+#class-list.dragging .class-grid.is-empty {
+  display: grid; place-items: center; min-height: 96px; border: 2px dashed var(--line-2); border-radius: var(--radius);
+  color: var(--ink-3); font-size: .95rem;
+}
+#class-list.dragging .class-grid.is-empty::after { content: attr(data-empty); grid-column: 1 / -1; }
+.class-drag-src { opacity: .35; }
+.class-drag-src .class-card { box-shadow: none; transform: none; }
+.class-ghost { position: fixed; z-index: 1000; margin: 0; pointer-events: none; transform: rotate(-1.5deg); }
+.class-ghost .class-card { box-shadow: 0 10px 28px rgba(27, 34, 50, .22); }
+.class-ghost .class-tool { opacity: 1; }
+
 /* ---------- class page ---------- */
 .class-banner {
   display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap;

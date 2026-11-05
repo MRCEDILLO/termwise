@@ -333,3 +333,16 @@ test('a Google account the admin has not added cannot make a class', async () =>
   await assert.rejects(stranger.listAllowedTeachers());
   await assert.rejects(stranger.allowTeacher('newbie@example.com'));
 });
+
+test("a teacher's class order and pins are saved on their own record, out of students' reach", async () => {
+  const run = Date.now();
+  const teacher = createFirebaseStore(config(`co${run}`, { sub: `gabeco${run}`, email: 'gabe@example.com', email_verified: true, name: 'Gabe' }));
+  await teacher.signInTeacher();
+  await waitForUser(teacher);
+  assert.deepEqual(await teacher.getClassOrder(), { order: [], pinned: [] });
+  await teacher.saveClassOrder({ order: ['b', 'a', 'c'], pinned: ['b'] });
+  assert.deepEqual(await teacher.getClassOrder(), { order: ['b', 'a', 'c'], pinned: ['b'] });
+  // Signing in again keeps them (it merges the name and email in).
+  await teacher.signInTeacher();
+  assert.deepEqual(await teacher.getClassOrder(), { order: ['b', 'a', 'c'], pinned: ['b'] });
+});
