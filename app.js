@@ -323,10 +323,17 @@ async function showTeachers() {
 async function showTeacherHome() {
   show($app, frame(html`<div class="loading">Loading your classes…</div>`));
   let classes = [];
-  try { classes = await store.listMyClasses(); } catch (e) { console.error(e); toast("Couldn't load your classes.", 'error'); }
-  classes.sort((a, b) => (a.archived - b.archived) || a.name.localeCompare(b.name));
+  let order = { order: [], pinned: [] };
+  try {
+    [classes, order] = await Promise.all([
+      store.listMyClasses(),
+      store.getClassOrder().catch((e) => { console.error(e); return { order: [], pinned: [] }; }),
+    ]);
+  } catch (e) { console.error(e); toast("Couldn't load your classes.", 'error'); }
   const live = classes.filter((c) => !c.archived);
   state.today = null;
+  state.home = { classes, order };
+  const byName = classes.slice().sort((a, b) => (a.archived - b.archived) || a.name.localeCompare(b.name));
   show($app, frame(html`
     ${live.length ? html`<section class="today" id="today" aria-label="Your lessons today"><p class="loading small">Loading today's lessons…</p></section>` : ''}
     <div class="page-head">
@@ -334,20 +341,90 @@ async function showTeacherHome() {
       <button class="btn primary" data-action="new-class">New class</button>
     </div>
     ${classes.length ? '' : html`<p class="empty">No classes yet. Make your first one with <strong>New class</strong>.</p>`}
-    <div class="class-grid">
-      ${classes.map((c) => html`
-        <a class="class-card ${c.archived ? 'archived' : ''}" href="#/class/${c.id}">
-          <div class="class-card-banner" style="--class:${colourOf(c)}">
-            <span class="class-card-name">${c.name}</span>
-            <span class="class-card-sub">${[c.subject, c.year].filter(Boolean).join(' · ')}</span>
-          </div>
-          <div class="class-card-foot">
-            ${c.archived ? html`<span class="tag">Archived</span>` : html`<span>Key <span class="mono">${formatKey(c.currentKey)}</span></span>`}
-          </div>
-        </a>`)}
-    </div>
-    ${newClassDialog(classes)}`, { wide: true }));
+    <div id="class-list"></div>
+    ${newClassDialog(byName)}`, { wide: true }));
+  renderClassList();
   if (live.length) loadToday(live);
+}
+
+/* ---------- the class list: the teacher's own order, with pinned classes on top ---------- */
+
+// Pinned classes come first, then a line, then the rest, then archived ones. The order and the pins are
+// saved on the teacher's own record (teachers/{uid}), so students never see them. Classes that have
+// never been moved keep alphabetical order after the ones that have.
+function arrangeClasses(classes, { order = [], pinned = [] } = {}) {
+  const rank = new Map(order.map((id, i) => [id, i]));
+  const at = (c) => (rank.has(c.id) ? rank.get(c.id) : order.length);
+  const sorted = classes.slice().sort((a, b) => (a.archived - b.archived) || (at(a) - at(b)) || a.name.localeCompare(b.name));
+  const pins = new Set(pinned);
+  return {
+    pinned: sorted.filter((c) => !c.archived && pins.has(c.id)),
+    rest: sorted.filter((c) => c.archived || !pins.has(c.id)),
+  };
+}
+
+const PIN_ICON = raw('<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>');
+
+function classTile(c, pinned) {
+  return html`
+    <div class="class-tile ${pinned ? 'pinned' : ''}" data-id="${c.id}" ${raw(c.archived ? 'data-archived="1"' : '')}>
+      <a class="class-card ${c.archived ? 'archived' : ''}" href="#/class/${c.id}">
+        <div class="class-card-banner" style="--class:${colourOf(c)}">
+          <span class="class-card-name">${c.name}</span>
+          <span class="class-card-sub">${[c.subject, c.year].filter(Boolean).join(' · ')}</span>
+        </div>
+        <div class="class-card-foot">
+          ${c.archived ? html`<span class="tag">Archived</span>` : html`<span>Key <span class="mono">${formatKey(c.currentKey)}</span></span>`}
+        </div>
+      </a>
+      ${c.archived ? '' : html`
+        <div class="class-tools">
+          <button type="button" class="class-tool class-grip" data-id="${c.id}" title="Drag to move" aria-label="Move ${c.name}. Use the arrow keys.">⋮⋮</button>
+          <button type="button" class="class-tool class-pin" data-action="pin-class" data-id="${c.id}" aria-pressed="${pinned ? 'true' : 'false'}"
+            title="${pinned ? 'Unpin' : 'Pin to the top'}" aria-label="${pinned ? `Unpin ${c.name}` : `Pin ${c.name} to the top`}">${PIN_ICON}</button>
+        </div>`}
+    </div>`;
+}
+
+function renderClassList() {
+  const el = document.getElementById('class-list');
+  const h = state.home;
+  if (!el || !h || !h.classes.length) return;
+  const { pinned, rest } = arrangeClasses(h.classes, h.order);
+  show(el, html`
+    <div class="class-grid" data-group="pinned" data-empty="Drop here to pin">${pinned.map((c) => classTile(c, true))}</div>
+    <hr class="pin-line">
+    <div class="class-grid" data-group="rest" data-empty="Drop here to unpin">${rest.map((c) => classTile(c, false))}</div>`);
+  classZones(el);
+}
+
+// Empty groups and the line are hidden, except while dragging, when an empty group is a drop zone.
+function classZones(el) {
+  const [pins, rest] = ['pinned', 'rest'].map((g) => el.querySelector(`[data-group="${g}"]`));
+  pins.classList.toggle('is-empty', !pins.querySelector('.class-tile'));
+  rest.classList.toggle('is-empty', !rest.querySelector('.class-tile'));
+  el.classList.toggle('has-pins', !!pins.querySelector('.class-tile'));
+}
+
+// Saves whatever the page now shows.
+async function saveClassOrder() {
+  const el = document.getElementById('class-list');
+  const h = state.home;
+  if (!el || !h) return;
+  const ids = (sel) => [...el.querySelectorAll(sel)].map((t) => t.dataset.id);
+  const next = { order: ids('.class-tile'), pinned: ids('[data-group="pinned"] .class-tile') };
+  const before = arrangeClasses(h.classes, h.order);
+  const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+  const was = [...before.pinned, ...before.rest].map((c) => c.id);
+  const wasPinned = before.pinned.map((c) => c.id);
+  if (same(was, next.order) && same(wasPinned, next.pinned)) { renderClassList(); return; }
+  const added = next.pinned.filter((id) => !wasPinned.includes(id));
+  const removed = wasPinned.filter((id) => !next.pinned.includes(id));
+  h.order = next;
+  renderClassList();
+  const name = (id) => (h.classes.find((c) => c.id === id) || {}).name;
+  const msg = added.length ? `Pinned ${name(added[0])}` : removed.length ? `Unpinned ${name(removed[0])}` : 'Order saved';
+  await saving(store.saveClassOrder(next), msg);
 }
 
 /* ---------- today: every class's lessons for today and the next school day ---------- */
@@ -2332,6 +2409,14 @@ $app.addEventListener('click', async (ev) => {
     if (await saving(store.removeTeacher(email), 'Removed')) showTeachers();
   } else if (action === 'new-class') {
     document.getElementById('new-class').showModal();
+  } else if (action === 'pin-class') {
+    // Pinning puts the class at the end of the pinned ones; unpinning puts it first after the line.
+    const tile = btn.closest('.class-tile');
+    const list = document.getElementById('class-list');
+    if (tile.closest('[data-group="pinned"]')) list.querySelector('[data-group="rest"]').prepend(tile);
+    else list.querySelector('[data-group="pinned"]').append(tile);
+    await saveClassOrder();
+    document.querySelector(`.class-pin[data-id="${btn.dataset.id}"]`)?.focus();
   } else if (action === 'close-dialog') {
     btn.closest('dialog').close();
     if (c) c.copyTo = null;
@@ -3114,6 +3199,123 @@ $app.addEventListener('keydown', async (ev) => {
   }
   await saveLibraryOrder();
   document.querySelector(`.lib-grip[data-drag="${grip.dataset.drag}"][data-id="${grip.dataset.id}"]`)?.focus();
+});
+
+/* ---------- drag to reorder the class list, and to pin or unpin by dragging across the line ---------- */
+
+// Works like the Lessons tab: pointer events, only the ⋮⋮ grip starts a drag, the real card moves
+// through the grid as you go and letting go saves the order the page shows.
+let classDrag = null;
+
+$app.addEventListener('pointerdown', (ev) => {
+  const grip = ev.target.closest && ev.target.closest('.class-grip');
+  if (!grip || ev.button > 0 || classDrag) return;
+  const el = grip.closest('.class-tile');
+  if (!el) return;
+  ev.preventDefault();
+  grip.setPointerCapture(ev.pointerId);
+  classDrag = { el, grip, pointer: ev.pointerId, x0: ev.clientX, y0: ev.clientY, x: ev.clientX, y: ev.clientY, on: false };
+});
+
+function startClassDrag(d) {
+  d.on = true;
+  d.list = d.el.closest('#class-list');
+  const box = d.el.getBoundingClientRect();
+  d.dx = d.x0 - box.left;
+  d.dy = d.y0 - box.top;
+  d.ghost = d.el.cloneNode(true);
+  d.ghost.classList.add('class-ghost');
+  Object.assign(d.ghost.style, { left: `${d.x - d.dx}px`, top: `${d.y - d.dy}px`, width: `${box.width}px`, height: `${box.height}px` });
+  document.body.append(d.ghost);
+  d.el.classList.add('class-drag-src');
+  d.list.classList.add('dragging');
+  document.body.classList.add('lib-dragging');
+  classZones(d.list);
+  const tick = () => {
+    if (classDrag !== d) return;
+    const edge = 56;
+    let step = 0;
+    if (d.y < edge) step = -Math.ceil((edge - d.y) / 4);
+    else if (d.y > innerHeight - edge) step = Math.ceil((d.y - (innerHeight - edge)) / 4);
+    if (step) { window.scrollBy(0, Math.max(-24, Math.min(24, step))); placeClassDrag(d); }
+    d.frame = requestAnimationFrame(tick);
+  };
+  d.frame = requestAnimationFrame(tick);
+}
+
+// Moves the dragged card to wherever the pointer is. Archived classes stay at the end.
+function placeClassDrag(d) {
+  Object.assign(d.ghost.style, { left: `${d.x - d.dx}px`, top: `${d.y - d.dy}px` });
+  const under = document.elementFromPoint(d.x, d.y);
+  const grid = under && under.closest('#class-list .class-grid');
+  if (!grid) return;
+  const firstArchived = grid.querySelector('.class-tile[data-archived]');
+  const tile = under.closest('.class-tile');
+  if (tile === d.el) return;
+  if (!tile) {
+    // Empty space in a grid (or an empty drop zone): the end of that group.
+    if (grid.contains(d.el) && !firstArchived) return;
+    if (firstArchived) firstArchived.before(d.el); else grid.append(d.el);
+  } else if (tile.dataset.archived) {
+    if (firstArchived.previousElementSibling !== d.el) firstArchived.before(d.el);
+  } else {
+    const b = tile.getBoundingClientRect();
+    // Several cards to a row: left or right half. One to a row (phones): top or bottom half.
+    const oneColumn = b.width > grid.clientWidth * 0.6;
+    const after = oneColumn ? d.y > b.top + b.height / 2 : d.x > b.left + b.width / 2;
+    if (after) tile.after(d.el); else tile.before(d.el);
+  }
+  classZones(d.list);
+}
+
+$app.addEventListener('pointermove', (ev) => {
+  const d = classDrag;
+  if (!d || ev.pointerId !== d.pointer) return;
+  d.x = ev.clientX;
+  d.y = ev.clientY;
+  if (!d.on) {
+    if (Math.hypot(d.x - d.x0, d.y - d.y0) < 5) return;
+    startClassDrag(d);
+  }
+  placeClassDrag(d);
+});
+
+function endClassDrag(save) {
+  const d = classDrag;
+  classDrag = null;
+  if (!d || !d.on) return;
+  cancelAnimationFrame(d.frame);
+  d.ghost.remove();
+  d.list.classList.remove('dragging');
+  document.body.classList.remove('lib-dragging');
+  d.el.classList.remove('class-drag-src');
+  if (save) saveClassOrder(); else renderClassList(); // put everything back
+}
+$app.addEventListener('pointerup', (ev) => { if (classDrag && ev.pointerId === classDrag.pointer) endClassDrag(true); });
+$app.addEventListener('pointercancel', (ev) => { if (classDrag && ev.pointerId === classDrag.pointer) endClassDrag(false); });
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && classDrag) endClassDrag(false); });
+
+// Keyboard: the arrow keys on a grip move the class one place. Moving up past the first
+// unpinned class pins it; moving down past the last pinned class unpins it.
+$app.addEventListener('keydown', async (ev) => {
+  const grip = ev.target.closest && ev.target.closest('.class-grip');
+  if (!grip || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(ev.key)) return;
+  ev.preventDefault();
+  const up = ev.key === 'ArrowUp' || ev.key === 'ArrowLeft';
+  const tile = grip.closest('.class-tile');
+  const list = document.getElementById('class-list');
+  const group = tile.closest('.class-grid');
+  const pinned = group.dataset.group === 'pinned';
+  const other = up ? tile.previousElementSibling : tile.nextElementSibling;
+  if (other && !other.dataset.archived) {
+    if (up) other.before(tile); else other.after(tile);
+  } else if (up && !pinned) {
+    list.querySelector('[data-group="pinned"]').append(tile);
+  } else if (!up && pinned) {
+    list.querySelector('[data-group="rest"]').prepend(tile);
+  } else return;
+  await saveClassOrder();
+  document.querySelector(`.class-grip[data-id="${grip.dataset.id}"]`)?.focus();
 });
 
 /* ---------- start ---------- */

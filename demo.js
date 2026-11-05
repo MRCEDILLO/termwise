@@ -205,6 +205,14 @@ export function createDemoStore() {
       persist();
       return id;
     },
+    async getClassOrder() {
+      const d = (data.classOrders || {})[user.uid] || {};
+      return { order: d.order || [], pinned: d.pinned || [] };
+    },
+    async saveClassOrder({ order, pinned }) {
+      (data.classOrders ||= {})[user.uid] = { order: [...order], pinned: [...pinned] };
+      persist();
+    },
     async getClass(id) {
       await tick();
       return canRead(id) ? { id, ...data.classes[id] } : null;

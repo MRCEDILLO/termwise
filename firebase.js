@@ -124,6 +124,19 @@ export function createFirebaseStore(config) {
       }
     },
 
+    // The teacher's own order for their class list and which classes are pinned. Kept on their
+    // teachers/{uid} record rather than on the classes, so students never see it.
+    async getClassOrder() {
+      const snap = await orNull(getDoc(doc(db, 'teachers', auth.currentUser.uid)));
+      const d = snap && snap.exists() ? snap.data() : {};
+      const ids = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
+      return { order: ids(d.classOrder), pinned: ids(d.pinnedClasses) };
+    },
+
+    saveClassOrder({ order, pinned }) {
+      return setDoc(doc(db, 'teachers', auth.currentUser.uid), { classOrder: order, pinnedClasses: pinned }, { merge: true });
+    },
+
     async getClass(id) {
       const snap = await orNull(getDoc(doc(db, 'classes', id)));
       return snap && snap.exists() ? { id, ...snap.data() } : null;
