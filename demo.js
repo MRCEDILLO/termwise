@@ -302,9 +302,10 @@ export function createDemoStore() {
       (demoFiles[classId] ||= []).push({ ...f, blob: URL.createObjectURL(file) });
       return f;
     },
-    async updateFile(classId, fileId, patch) {
-      Object.assign((demoFiles[classId] || []).find((f) => f.id === fileId) || {}, patch);
+    async updateFile(classId, f, patch) {
+      Object.assign((demoFiles[classId] || []).find((x) => x.id === f.id) || {}, patch);
     },
+    async syncFileAccess() {},
     async deleteFile(classId, f) {
       demoFiles[classId] = (demoFiles[classId] || []).filter((x) => x.id !== f.id);
     },

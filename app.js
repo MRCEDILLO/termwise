@@ -20,6 +20,8 @@ const store = FIREBASE_CONFIG.apiKey
 
 const $app = document.getElementById('app');
 const state = { user: undefined, cls: null };
+// Classes whose file lock settings were checked against the stored files this visit.
+const syncedFiles = new Set();
 
 // Banner and unit colours, all dark enough for white text. The rules allow up to 32.
 export const CLASS_COLOURS = [
@@ -359,6 +361,11 @@ async function showClass(id, tab, sub = '') {
       students, marks, tracker: { ...emptyTracker(), ...(tracker || {}) },
     };
     sortLessons(state.cls);
+    // Once per class per visit: make sure students can open the files they should (see syncFileAccess).
+    if (isOwner && files.length && !syncedFiles.has(id)) {
+      syncedFiles.add(id);
+      store.syncFileAccess(id, files).catch((e) => { syncedFiles.delete(id); console.error(e); });
+    }
     state.cls.editTerm = (currentWeek(plan, todayISO()) || { term: 1 }).term;
     // The tracker opens on the current semester; reports on the whole year.
     state.cls.trackPeriod = state.cls.editTerm <= 2 ? 's1' : 's2';
@@ -1299,7 +1306,7 @@ async function updateFile(fileId, field, el) {
     : { [field]: el.checked };
   Object.assign(f, patch);
   renderPanel();
-  await saving(store.updateFile(c.id, fileId, patch));
+  await saving(store.updateFile(c.id, f, patch));
 }
 
 function slotsByWeek(r) {

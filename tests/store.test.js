@@ -119,9 +119,14 @@ test('teacher creates a class, a student joins, the key is regenerated, the clas
   assert.ok(await student.fileUrl(id, sheet));
   await assert.rejects(student.fileUrl(id, answers), /unauthorized/);
   assert.ok(await teacher.fileUrl(id, answers), 'the teacher can always open it');
-  await teacher.updateFile(id, answers.id, { unlockAt: Date.now() + 86400000 });
+  Object.assign(answers, { unlockAt: Date.now() + 86400000 });
+  await teacher.updateFile(id, answers, { unlockAt: answers.unlockAt });
   await assert.rejects(student.fileUrl(id, answers), /unauthorized/, 'not until the date');
-  await teacher.updateFile(id, answers.id, { unlocked: true });
+  Object.assign(answers, { unlocked: true });
+  await teacher.updateFile(id, answers, { unlocked: true });
+  assert.ok(await student.fileUrl(id, answers));
+  // The teacher's check finds nothing to fix, and leaves the student able to open it.
+  await teacher.syncFileAccess(id, await teacher.listFiles(id));
   assert.ok(await student.fileUrl(id, answers));
   await teacher.deleteFile(id, sheet);
   assert.deepEqual((await teacher.listFiles(id)).map((f) => f.name), ['Answers.pdf']);
