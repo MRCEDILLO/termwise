@@ -6,7 +6,7 @@ import { createDemoStore } from './demo.js';
 import { normaliseKey, formatKey } from './keys.js';
 import { ACCEPT, fileProblem, isOpen, fileSize, fileIcon } from './files.js';
 import {
-  schedule, emptyPlan, isAssessmentLike, currentWeek, weekRange, slotLabel, cellText, slotDate,
+  schedule, emptyPlan, isAssessmentLike, lessonKind, currentWeek, weekRange, slotLabel, cellText, slotDate,
   DAYS, PERIODS_PER_DAY, MAX_WEEKS, TERM_COUNT, clampWeeks,
 } from './planner.js';
 import {
@@ -47,6 +47,11 @@ function html(strings, ...vals) {
   });
   return raw(out);
 }
+// Assessment (★, red) and revision (↻, violet) markers. lessonKind gives 'assess', 'revise' or ''.
+const KINDS = { assess: { mark: '★', label: 'Assessment' }, revise: { mark: '↻', label: 'Revision' } };
+const kindMark = (l) => { const k = KINDS[lessonKind(l)]; return k ? `${k.mark} ` : ''; };
+const kindIcon = (kind) => (KINDS[kind] ? html`<span class="mark ${kind}" aria-label="${KINDS[kind].label}">${KINDS[kind].mark}</span> ` : '');
+const kindTag = (l) => { const kind = lessonKind(l); return KINDS[kind] ? html`<span class="tag ${kind}-tag">${KINDS[kind].mark} ${KINDS[kind].label}</span>` : ''; };
 const show = (el, content) => { el.innerHTML = String(content); };
 
 /* ---------- dates ---------- */
@@ -684,7 +689,7 @@ function plannerPanel(c) {
     const unit = unitId && unitById(unitId);
     const nFiles = filesFor(c, l.id).length;
     return html`${sep}
-      <li class="lesson ${l.status !== 'scheduled' ? `st-${l.status}` : ''} ${isAssessmentLike(l) ? 'assess' : ''}" data-id="${l.id}" style="--unit:${unitColour(c, unitId)}">
+      <li class="lesson ${l.status !== 'scheduled' ? `st-${l.status}` : ''} ${lessonKind(l)}" data-id="${l.id}" style="--unit:${unitColour(c, unitId)}">
         <span class="grip" draggable="true" aria-hidden="true" title="Drag to reorder. Hold Shift to bring the rest of the unit.">⋮⋮</span>
         <span class="num">${i + 1}</span>
         <div class="lesson-main">
@@ -693,7 +698,7 @@ function plannerPanel(c) {
             ${unit ? html`<span class="unit-tag">${unit.name}</span>` : ''}
             ${when ? html`<span class="when">${when}</span>` : ''}
             ${statusText(l) ? html`<span class="tag ${l.status === 'skipped' ? '' : 'bad'}">${statusText(l)}</span>` : ''}
-            ${isAssessmentLike(l) ? html`<span class="tag assess-tag">★ Assessment</span>` : ''}
+            ${kindTag(l)}
             ${nFiles ? html`<span class="file-count" title="${plural(nFiles, 'file')}">📎 ${nFiles}</span>` : ''}
           </div>
         </div>
@@ -875,7 +880,7 @@ function libraryPanel(c) {
               <li data-title="${l.title.toLowerCase()}" data-id="${l.id}">
                 ${grip('lesson', l.id, l.title)}
                 <a href="${lessonUrl(c, l.id)}" class="${l.id === c.lessonId ? 'on' : ''} ${isPlaced(l) ? '' : 'unplaced'}" ${raw(l.id === c.lessonId ? 'aria-current="page"' : '')}>
-                  <span class="lib-title">${isAssessmentLike(l) ? '★ ' : ''}${l.title}</span>
+                  <span class="lib-title">${kindMark(l)}${l.title}</span>
                   <span class="lib-when">${whenShort(l)}</span>
                 </a>
               </li>`)}</ul>` : ''}
@@ -986,7 +991,7 @@ function lessonPage(c, l) {
       ${unit ? html`<p class="lp-unit">${unit.name}</p>` : ''}
       <h2>${l.title}</h2>
       <div class="lp-tags">
-        ${isAssessmentLike(l) ? html`<span class="tag assess-tag">★ Assessment</span>` : ''}
+        ${kindTag(l)}
         ${l.homework ? html`<span class="tag">Homework</span>` : ''}
       </div>
       ${when.length ? html`<p class="lp-when">Term ${when[0].term}, Week ${when[0].week}: ${when.map((s) => s.text).join(' · ')}</p>` : ''}
@@ -1042,7 +1047,7 @@ function upNextCard(c) {
           <span class="up-when">${it.when}</span>
           ${it.blocked
             ? html`<span class="up-title"><span class="tag">Cancelled</span> ${it.label || 'No class'}</span>`
-            : html`<a class="up-title" href="${lessonUrl(c, it.lesson.id)}">${isAssessmentLike(it.lesson) ? '★ ' : ''}${it.lesson.title}</a>`}
+            : html`<a class="up-title" href="${lessonUrl(c, it.lesson.id)}">${kindMark(it.lesson)}${it.lesson.title}</a>`}
         </li>`)}</ul>` : html`<p class="empty small">No lessons this week.</p>`}
       <a class="more" href="#/class/${c.id}/week">Week calendar →</a>
     </section>`;
@@ -1187,13 +1192,13 @@ function weekCalendar(c) {
       }
       const last = at.get(`${day}-${p + span - 1}`);
       const l = r.lessons[s.lessonIndex];
-      const a = isAssessmentLike(l);
+      const k = lessonKind(l);
       const part = s.of > 1 ? (span > 1 ? `Parts ${s.part}–${last.part} of ${s.of}` : `Part ${s.part} of ${s.of}`) : '';
       dayTiles++;
       const nFiles = filesFor(c, l.id).length;
-      cells.push(html`<a class="tile ${a ? 'assess' : ''}" href="${lessonUrl(c, l.id)}" style="grid-column:${day + 1};grid-row:${p + 1} / span ${span}">
+      cells.push(html`<a class="tile ${k}" href="${lessonUrl(c, l.id)}" style="grid-column:${day + 1};grid-row:${p + 1} / span ${span}">
         <span class="tile-when">${span > 1 ? `P${p}–${p + span - 1}` : `P${p}`} <span class="tile-day">· ${DAYS[day - 1]}</span></span>
-        <span class="tile-title">${a ? html`<span aria-label="Assessment">★ </span>` : ''}${l.title}</span>
+        <span class="tile-title">${kindIcon(k)}${l.title}</span>
         ${part ? html`<span class="tile-part">${part}</span>` : ''}
         ${l.homework ? html`<span class="tag">Homework</span>` : ''}
         ${nFiles ? html`<span class="tile-files">📎 ${plural(nFiles, 'file')}</span>` : ''}
@@ -1227,7 +1232,7 @@ function weekCalendar(c) {
         <div class="cal-corner" aria-hidden="true"></div>
         ${periodLabels}${lines}${cells}
       </div>
-      <p class="hint">Use the arrows, the ← → keys or the notches above to flip between weeks. Click a lesson to open it. ★ marks assessments.</p>
+      <p class="hint">Use the arrows, the ← → keys or the notches above to flip between weeks. Click a lesson to open it. ★ marks assessments and ↻ marks revision.</p>
     </section>`;
 }
 
@@ -1371,8 +1376,8 @@ function timetablePanel(c) {
           if (s.blocked) return html`<td class="cancelled"><span class="tag">Cancelled</span> ${s.label}</td>`;
           if (s.lessonIndex === null) return html`<td class="free"><span class="sr-only">Free</span></td>`;
           const l = r.lessons[s.lessonIndex];
-          const a = isAssessmentLike(l);
-          return html`<td class="${a ? 'assess' : ''}"><a href="${lessonUrl(c, l.id)}">${a ? html`<span class="star" aria-label="Assessment">★</span> ` : ''}${cellText(s, r.lessons)}</a></td>`;
+          const k = lessonKind(l);
+          return html`<td class="${k}"><a href="${lessonUrl(c, l.id)}">${kindIcon(k)}${cellText(s, r.lessons)}</a></td>`;
         })}
       </tr>`);
     }
@@ -1385,7 +1390,7 @@ function timetablePanel(c) {
       </section>`;
   });
   return html`${c.isOwner ? yearBanner(r) : ''}${tables}
-    <p class="hint">★ marks assessments, tests, quizzes, exams and reviews. Multi-period lessons show the part, e.g. (2/3).</p>`;
+    <p class="hint">★ marks assessments, tests, quizzes and exams. ↻ marks revision and review lessons. Multi-period lessons show the part, e.g. (2/3).</p>`;
 }
 
 /* ---------- tracker: class list, marks and homework (teacher only) ---------- */
@@ -2371,7 +2376,7 @@ $app.addEventListener('change', async (ev) => {
       if (f === 'title') {
         el.value = lessonById(id).title;
         const side = document.querySelector('.lib-lessons a.on .lib-title');
-        if (side) side.textContent = (isAssessmentLike(lessonById(id)) ? '★ ' : '') + lessonById(id).title;
+        if (side) side.textContent = kindMark(lessonById(id)) + lessonById(id).title;
       }
     } else {
       renderPanel();
