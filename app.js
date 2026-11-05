@@ -1912,66 +1912,90 @@ function setupPanel(c) {
   const nums = (n) => Array.from({ length: n }, (_, i) => i + 1);
   return html`
     <div class="setup-grid">
-      <section class="card">
-        <h2>Class details</h2>
-        <form data-form="details" class="stack">
-          <label>Class name <input name="name" required maxlength="80" value="${c.cls.name}"></label>
-          <div class="row2">
-            <label>Subject <input name="subject" maxlength="80" value="${c.cls.subject}"></label>
-            <label>Year <input name="year" maxlength="20" value="${c.cls.year}"></label>
-          </div>
-          <div class="row2">
-            <label>Teacher name <input name="teacher" maxlength="80" value="${c.cls.teacher || ''}" placeholder="Your name"></label>
-            <label>Contact <input name="contact" maxlength="200" value="${c.cls.contact || ''}" placeholder="Your school email"></label>
-          </div>
-          <label>About this class <span class="optional">(shown on the Home tab)</span>
-            <textarea name="about" rows="3" maxlength="1000" placeholder="Room, what to bring, how to get help…">${c.cls.about || ''}</textarea></label>
-          <fieldset class="swatches">
-            <legend>Banner colour</legend>
-            ${CLASS_COLOURS.map((col, i) => html`
-              <label class="swatch" style="--class:${col}">
-                <input type="radio" name="colour" value="${i}" ${raw(i === (Number(c.cls.colour) || 0) ? 'checked' : '')}>
-                <span class="sr-only">Colour ${i + 1}</span>
-              </label>`)}
-          </fieldset>
-          <button class="btn primary" type="submit">Save details</button>
-        </form>
-      </section>
+      <!-- Two columns that stack separately: details and meeting times on the left; terms, key and archive on the right. -->
+      <div class="setup-col">
+        <section class="card">
+          <h2>Class details</h2>
+          <form data-form="details" class="stack">
+            <label>Class name <input name="name" required maxlength="80" value="${c.cls.name}"></label>
+            <div class="row2">
+              <label>Subject <input name="subject" maxlength="80" value="${c.cls.subject}"></label>
+              <label>Year <input name="year" maxlength="20" value="${c.cls.year}"></label>
+            </div>
+            <div class="row2">
+              <label>Teacher name <input name="teacher" maxlength="80" value="${c.cls.teacher || ''}" placeholder="Your name"></label>
+              <label>Contact <input name="contact" maxlength="200" value="${c.cls.contact || ''}" placeholder="Your school email"></label>
+            </div>
+            <label>About this class <span class="optional">(shown on the Home tab)</span>
+              <textarea name="about" rows="3" maxlength="1000" placeholder="Room, what to bring, how to get help…">${c.cls.about || ''}</textarea></label>
+            <fieldset class="swatches">
+              <legend>Banner colour</legend>
+              ${CLASS_COLOURS.map((col, i) => html`
+                <label class="swatch" style="--class:${col}">
+                  <input type="radio" name="colour" value="${i}" ${raw(i === (Number(c.cls.colour) || 0) ? 'checked' : '')}>
+                  <span class="sr-only">Colour ${i + 1}</span>
+                </label>`)}
+            </fieldset>
+            <button class="btn primary" type="submit">Save details</button>
+          </form>
+        </section>
 
-      <section class="card">
-        <h2>Terms</h2>
-        <p class="hint">The first day of each term, and how many weeks it runs (up to ${MAX_WEEKS}). You choose which term each lesson is in on the Planner tab.</p>
-        <table class="terms-table">
-          <thead><tr><th scope="col">Term</th><th scope="col">Starts</th><th scope="col">Weeks</th></tr></thead>
-          <tbody>
-            ${p.terms.map((t, i) => html`<tr>
-              <th scope="row">Term ${i + 1}</th>
-              <td><input type="date" data-term="${i}" data-field="start" value="${t.start}" aria-label="Term ${i + 1} start date"></td>
-              <td><input type="number" min="0" max="${MAX_WEEKS}" data-term="${i}" data-field="weeks" value="${t.weeks}" aria-label="Term ${i + 1} weeks"></td>
-            </tr>`)}
-          </tbody>
-        </table>
-      </section>
+        <section class="card">
+          <h2>When this class meets</h2>
+          <p class="hint">Tick every period this class has in a normal week. <strong>${pat.size}</strong> per week.</p>
+          <div class="table-scroll">
+            <table class="pattern">
+              <thead><tr><th></th>${DAYS.map((d) => html`<th scope="col">${d}</th>`)}</tr></thead>
+              <tbody>
+                ${nums(PERIODS_PER_DAY).map((per) => html`<tr>
+                  <th scope="row">Period ${per}</th>
+                  ${nums(5).map((day) => {
+                    const on = pat.has(`${day}-${per}`);
+                    return html`<td><button class="pat ${on ? 'on' : ''}" data-action="toggle-pattern" data-key="${day}-${per}"
+                      aria-pressed="${on}" aria-label="${DAYS[day - 1]} period ${per}">${on ? '✓' : ''}</button></td>`;
+                  })}
+                </tr>`)}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
 
-      <section class="card">
-        <h2>When this class meets</h2>
-        <p class="hint">Tick every period this class has in a normal week. <strong>${pat.size}</strong> per week.</p>
-        <div class="table-scroll">
-          <table class="pattern">
-            <thead><tr><th></th>${DAYS.map((d) => html`<th scope="col">${d}</th>`)}</tr></thead>
+      <div class="setup-col">
+        <section class="card">
+          <h2>Terms</h2>
+          <p class="hint">The first day of each term, and how many weeks it runs (up to ${MAX_WEEKS}). You choose which term each lesson is in on the Planner tab.</p>
+          <table class="terms-table">
+            <thead><tr><th scope="col">Term</th><th scope="col">Starts</th><th scope="col">Weeks</th></tr></thead>
             <tbody>
-              ${nums(PERIODS_PER_DAY).map((per) => html`<tr>
-                <th scope="row">Period ${per}</th>
-                ${nums(5).map((day) => {
-                  const on = pat.has(`${day}-${per}`);
-                  return html`<td><button class="pat ${on ? 'on' : ''}" data-action="toggle-pattern" data-key="${day}-${per}"
-                    aria-pressed="${on}" aria-label="${DAYS[day - 1]} period ${per}">${on ? '✓' : ''}</button></td>`;
-                })}
+              ${p.terms.map((t, i) => html`<tr>
+                <th scope="row">Term ${i + 1}</th>
+                <td><input type="date" data-term="${i}" data-field="start" value="${t.start}" aria-label="Term ${i + 1} start date"></td>
+                <td><input type="number" min="0" max="${MAX_WEEKS}" data-term="${i}" data-field="weeks" value="${t.weeks}" aria-label="Term ${i + 1} weeks"></td>
               </tr>`)}
             </tbody>
           </table>
-        </div>
-      </section>
+        </section>
+
+        <section class="card">
+          <h2>Class key</h2>
+          ${c.cls.archived ? html`<p>This class is archived, so its key doesn't work. Restore it to let students back in.</p>` : html`
+            <p class="hint">Share this with your students, on the board or in Compass.</p>
+            <p class="big-key mono">${formatKey(c.cls.currentKey)}</p>
+            <div class="row">
+              <button class="btn" data-action="copy-key">Copy key</button>
+              <button class="btn" data-action="regen-key">Make a new key</button>
+            </div>
+            <p class="hint">A new key stops the old one working straight away. Students will need to type the new one.</p>`}
+        </section>
+
+        <section class="card">
+          <h2>Archive</h2>
+          ${c.cls.archived
+            ? html`<p>Students can't open this class while it's archived.</p><button class="btn" data-action="archive" data-value="0">Restore class</button>`
+            : html`<p class="hint">Archiving closes the class to students at once. You can still open it and restore it.</p><button class="btn danger-btn" data-action="archive" data-value="1">Archive class</button>`}
+        </section>
+      </div>
 
       <section class="card span2">
         <h2>Events and blocked time</h2>
@@ -1997,25 +2021,6 @@ function setupPanel(c) {
           <button class="btn" data-action="import-events">Import from another class</button>
         </div>
         ${c.importFrom ? importEventsDialog(c) : ''}
-      </section>
-
-      <section class="card">
-        <h2>Class key</h2>
-        ${c.cls.archived ? html`<p>This class is archived, so its key doesn't work. Restore it to let students back in.</p>` : html`
-          <p class="hint">Share this with your students, on the board or in Compass.</p>
-          <p class="big-key mono">${formatKey(c.cls.currentKey)}</p>
-          <div class="row">
-            <button class="btn" data-action="copy-key">Copy key</button>
-            <button class="btn" data-action="regen-key">Make a new key</button>
-          </div>
-          <p class="hint">A new key stops the old one working straight away. Students will need to type the new one.</p>`}
-      </section>
-
-      <section class="card">
-        <h2>Archive</h2>
-        ${c.cls.archived
-          ? html`<p>Students can't open this class while it's archived.</p><button class="btn" data-action="archive" data-value="0">Restore class</button>`
-          : html`<p class="hint">Archiving closes the class to students at once. You can still open it and restore it.</p><button class="btn danger-btn" data-action="archive" data-value="1">Archive class</button>`}
       </section>
     </div>`;
 }
