@@ -5,7 +5,6 @@ import { FIREBASE_CONFIG, SITE_NAME, ADMIN_EMAIL } from './config.js';
 import { createDemoStore } from './demo.js';
 import { normaliseKey, formatKey } from './keys.js';
 import { ACCEPT, fileProblem, isOpen, fileSize, fileIcon } from './files.js';
-import { CLASS_FILES } from './files.js';
 import {
   schedule, emptyPlan, isAssessmentLike, lessonKind, currentWeek, weekRange, slotLabel, cellText, slotDate, daySessions, homeworkDue,
   DAYS, PERIODS_PER_DAY, MAX_WEEKS, TERM_COUNT, clampWeeks,
@@ -15,6 +14,7 @@ import {
   assessmentSummary, homeworkSummary, classHomework, parseNames, sortStudents, scaleProblem, csvText, marksRows,
 } from './tracker.js';
 import { importEvents, copyToClass } from './template.js';
+import { CLASS_FILES } from './files.js';
 
 const store = FIREBASE_CONFIG.apiKey
   ? (await import('./firebase.js')).createFirebaseStore(FIREBASE_CONFIG)
