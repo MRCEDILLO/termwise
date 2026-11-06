@@ -71,3 +71,4 @@ npm test
    - Sharing a class with other teachers uses a separate **copy key** (Setup > Share with other teachers), off until the teacher turns it on. The key students join with never lets another teacher copy a class.
    - Setup downloads the lesson list with dates and the year's marks as spreadsheet files (CSV), and an archived class can be deleted for good.
    - Students' Home tab lists homework and when it's due (the next lesson after the homework lesson).
+   - Events and blocked time live on the Planner, in an **Events** tab next to Term 1 to 4 (with Import from another class). Setup keeps class details, meeting times, terms, keys, downloads and archive.
