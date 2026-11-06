@@ -4,7 +4,7 @@
 import { FIREBASE_CONFIG, SITE_NAME, ADMIN_EMAIL } from './config.js';
 import { createDemoStore } from './demo.js';
 import { normaliseKey, formatKey } from './keys.js';
-import { ACCEPT, fileProblem, isOpen, fileSize, fileIcon } from './files.js';
+import { ACCEPT, fileProblem, isOpen, fileSize, fileIcon, linkUrl, linkHost, MAX_LINKS } from './files.js';
 import {
   schedule, emptyPlan, isAssessmentLike, lessonKind, currentWeek, weekRange, slotLabel, cellText, slotDate, daySessions, homeworkDue,
   DAYS, PERIODS_PER_DAY, MAX_WEEKS, TERM_COUNT, clampWeeks,
@@ -73,19 +73,50 @@ const rangeText = (r) => (r ? `${fmtShort(r.from)} – ${fmtShort(r.to)}` : '');
 /* ---------- small things ---------- */
 
 let toastTimer;
-function toast(msg, kind = 'ok') {
+let undoAction = null; // what the toast's Undo button (or Ctrl+Z) puts back, while it's showing
+
+// undo: a function that puts back what was just done. The toast then has an Undo button
+// and stays up longer, so there's time to reach it.
+function toast(msg, kind = 'ok', undo = null) {
   let el = document.getElementById('toast');
   if (!el) {
     el = document.createElement('div');
     el.id = 'toast';
     el.setAttribute('role', 'status');
+    el.addEventListener('click', (ev) => { if (ev.target.closest('[data-undo]')) runUndo(); });
     document.body.append(el);
   }
   el.textContent = msg;
-  el.className = `toast show ${kind}`;
+  undoAction = undo;
+  if (undo) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.undo = '1';
+    b.className = 'toast-undo';
+    b.textContent = 'Undo';
+    el.append(' ', b);
+  }
+  el.className = `toast show ${kind}${undo ? ' has-undo' : ''}`;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.className = 'toast'; }, kind === 'error' ? 6000 : 1800);
+  toastTimer = setTimeout(() => { el.className = 'toast'; undoAction = null; }, undo ? 8000 : kind === 'error' ? 6000 : 1800);
 }
+
+function runUndo() {
+  const fn = undoAction;
+  undoAction = null;
+  const el = document.getElementById('toast');
+  if (el) el.className = 'toast';
+  clearTimeout(toastTimer);
+  if (fn) fn();
+}
+
+// Ctrl+Z (Cmd+Z on a Mac) undoes the last drag while its toast is up, unless you're typing.
+document.addEventListener('keydown', (ev) => {
+  if (!undoAction || !(ev.ctrlKey || ev.metaKey) || ev.shiftKey || ev.key.toLowerCase() !== 'z') return;
+  if (ev.target.closest && ev.target.closest('input, textarea, select, [contenteditable]')) return;
+  ev.preventDefault();
+  runUndo();
+});
 
 async function saving(promise, ok = 'Saved') {
   try {
@@ -160,7 +191,7 @@ function applyRemote(id, kind, data) {
   } else if (kind === 'files') {
     if (!same(byId(c.files).map(noTimes), byId(data).map(noTimes))) { c.files = data; changed = true; }
   } else if (kind === 'posts') {
-    const brief = (list) => list.map((p) => [p.id, p.text]);
+    const brief = (list) => list.map((p) => [p.id, p.text, !!p.pinned, p.editedAt || 0]);
     if (!same(brief(c.posts), brief(data))) { c.posts = data; changed = true; }
   }
   const first = !c.seen.has(kind);
@@ -880,11 +911,23 @@ async function reorder(ids, toIndex) {
   ];
   if (next.every((l, i) => l === list[i])) return;
   const orders = list.map((l) => l.order); // the term keeps the same order numbers, shuffled
+  const before = new Map(list.map((l) => [l.id, l.order]));
   next.forEach((l, i) => { l.order = orders[i]; });
   sortLessons(c);
   recompute();
   renderPanel();
-  await saving(store.saveOrder(c.id, c.lessons), ids.length > 1 ? `Moved ${ids.length} lessons` : 'Order saved');
+  if (!await saving(store.saveOrder(c.id, c.lessons), '')) return;
+  toast(ids.length > 1 ? `Moved ${ids.length} lessons` : 'Order saved', 'ok', () => undoReorder(c, before));
+}
+
+// Puts the planner order back to how it was before a drag or move.
+async function undoReorder(c, before) {
+  if (state.cls !== c) return;
+  c.lessons.forEach((l) => { if (before.has(l.id)) l.order = before.get(l.id); });
+  sortLessons(c);
+  recompute();
+  renderPanel();
+  await saving(store.saveOrder(c.id, c.lessons), 'Move undone');
 }
 
 // The lesson plus the lessons right next to it (same term) from the same unit, for Shift-moves.
@@ -1243,6 +1286,10 @@ function lessonBuilder(c, l) {
         ${teacherFiles(c, l)}
       </section>
       <section class="builder-part">
+        <h3>Links</h3>
+        ${teacherLinks(l)}
+      </section>
+      <section class="builder-part">
         <h3>On the planner</h3>
         ${plan}
       </section>
@@ -1307,6 +1354,7 @@ function lessonPage(c, l) {
       ${l.description ? html`<div class="lp-desc">${linkify(l.description)}</div>` : ''}
       <h3>Files</h3>
       ${filesFor(c, l.id).length ? studentFiles(c, l.id) : html`<p class="empty small">No files for this lesson yet.</p>`}
+      ${lessonLinks(l).length ? html`<h3>Links</h3>${studentLinks(l)}` : ''}
       <nav class="lp-nav" aria-label="Other lessons">
         ${prev ? html`<a class="btn small" href="${lessonUrl(c, prev.id)}">← ${prev.title}</a>` : html`<span></span>`}
         ${next ? html`<a class="btn small" href="${lessonUrl(c, next.id)}">${next.title} →</a>` : ''}
@@ -1392,6 +1440,9 @@ function comingUpCard(c) {
     </section>`;
 }
 
+// Pinned announcements first, then newest first.
+const sortedPosts = (posts) => [...posts].sort((a, b) => (!!b.pinned - !!a.pinned) || b.createdAt - a.createdAt);
+
 function homePanel(c) {
   const cls = c.cls;
   const contact = (cls.contact || '').trim();
@@ -1406,14 +1457,27 @@ function homePanel(c) {
             <div class="row end"><button class="btn primary" type="submit">Post</button></div>
           </form>` : ''}
         <h2 class="feed-head">Announcements</h2>
-        ${c.posts.length ? c.posts.map((p) => html`
-          <article class="card post">
+        ${c.posts.length ? sortedPosts(c.posts).map((p) => html`
+          <article class="card post ${p.pinned ? 'pinned' : ''}" data-post="${p.id}">
             <header class="post-head">
               <span class="avatar" style="--class:${colourOf(cls)}" aria-hidden="true">${initials(cls.teacher)}</span>
-              <div class="post-who"><strong>${cls.teacher || 'Your teacher'}</strong><time datetime="${new Date(p.createdAt).toISOString()}">${fmtPosted(p.createdAt)}</time></div>
-              ${c.isOwner ? html`<button class="icon-btn danger" data-action="delete-post" data-post="${p.id}" aria-label="Delete this announcement">✕</button>` : ''}
+              <div class="post-who"><strong>${cls.teacher || 'Your teacher'}${p.pinned ? html` <span class="tag pin-tag">Pinned</span>` : ''}</strong>
+                <time datetime="${new Date(p.createdAt).toISOString()}">${fmtPosted(p.createdAt)}${p.editedAt ? ' · edited' : ''}</time></div>
+              ${c.isOwner && c.editPost !== p.id ? html`<div class="post-tools">
+                <button class="btn small ghost" data-action="pin-post" aria-pressed="${!!p.pinned}">${p.pinned ? 'Unpin' : 'Pin to top'}</button>
+                <button class="btn small ghost" data-action="edit-post">Edit</button>
+                <button class="icon-btn danger" data-action="delete-post" data-post="${p.id}" aria-label="Delete this announcement">✕</button>
+              </div>` : ''}
             </header>
-            <div class="post-text">${linkify(p.text)}</div>
+            ${c.isOwner && c.editPost === p.id ? html`
+              <form class="post-form" data-form="edit-post" data-post="${p.id}">
+                <label for="edit-post-text" class="sr-only">Edit announcement</label>
+                <textarea id="edit-post-text" name="text" rows="4" maxlength="4000" required>${p.text}</textarea>
+                <div class="row end">
+                  <button class="btn ghost" type="button" data-action="cancel-edit-post">Cancel</button>
+                  <button class="btn primary" type="submit">Save</button>
+                </div>
+              </form>` : html`<div class="post-text">${linkify(p.text)}</div>`}
           </article>`) : html`<p class="empty">${c.isOwner ? 'No announcements yet. What you post here is the first thing students see.' : 'No announcements yet.'}</p>`}
       </div>
       <aside class="home-side">
@@ -1650,6 +1714,39 @@ function teacherFiles(c, l) {
         <label class="btn small">Attach teacher-only file<input type="file" multiple accept="${ACCEPT}" data-upload="${l.id}" data-locked="1" class="sr-only"></label>
       </div>
     </div>`;
+}
+
+// A lesson's web links. Only http(s) links are ever drawn, whatever is stored.
+const lessonLinks = (l) => (Array.isArray(l.links) ? l.links : []).filter((k) => k && linkUrl(k.url) === k.url);
+
+// Links in the lesson builder: a video, a Desmos activity, a shared document.
+function teacherLinks(l) {
+  const links = lessonLinks(l);
+  return html`
+    <div class="lesson-links">
+      ${links.length ? html`<ul class="file-list">${links.map((k, i) => html`
+        <li class="file-row">
+          <a class="file-chip" href="${k.url}" target="_blank" rel="noopener" title="Open ${k.url}">
+            <span class="file-icon link-icon" aria-hidden="true">WEB</span>
+            <span class="file-name">${k.title || k.url}</span>
+            ${k.title ? html`<span class="file-size">${linkHost(k.url)}</span>` : ''}
+          </a>
+          <button class="icon-btn danger" data-action="delete-link" data-index="${i}" aria-label="Delete the link ${k.title || k.url}">✕</button>
+        </li>`)}</ul>` : ''}
+      ${links.length < MAX_LINKS ? html`
+        <form class="link-add" data-form="add-link" data-lesson-id="${l.id}">
+          <input name="linkUrl" inputmode="url" autocomplete="off" required maxlength="2000" placeholder="Paste a link, e.g. a video or Desmos activity" aria-label="Link address">
+          <input name="linkTitle" maxlength="200" placeholder="Name (optional)" aria-label="Link name">
+          <button class="btn small" type="submit">Add link</button>
+        </form>` : html`<p class="hint">That's the most links one lesson can have.</p>`}
+    </div>`;
+}
+
+function studentLinks(l) {
+  return html`<ul class="file-links">${lessonLinks(l).map((k) => html`
+    <li><a class="file-link" href="${k.url}" target="_blank" rel="noopener">
+      <span class="file-icon link-icon" aria-hidden="true">WEB</span><span class="file-name">${k.title || linkHost(k.url)}</span>
+      ${k.title ? html`<span class="file-when">${linkHost(k.url)}</span>` : ''}</a></li>`)}</ul>`;
 }
 
 // Files as students see them: a link, or a lock with when it opens.
@@ -2614,6 +2711,26 @@ $app.addEventListener('click', async (ev) => {
     recompute();
     renderPanel();
     await saving(store.deleteUnit(c.id, u.id, ids), 'Unit deleted');
+  } else if (action === 'pin-post' || action === 'edit-post' || action === 'cancel-edit-post') {
+    const id = btn.closest('[data-post]').dataset.post;
+    const p = c.posts.find((x) => x.id === id);
+    if (!p) return;
+    if (action === 'pin-post') {
+      p.pinned = !p.pinned;
+      renderPanel();
+      document.querySelector(`[data-post="${id}"] [data-action="pin-post"]`)?.focus();
+      await saving(store.updateAnnouncement(c.id, id, { pinned: p.pinned }), p.pinned ? 'Pinned to the top' : 'Unpinned');
+    } else {
+      c.editPost = action === 'edit-post' ? id : null;
+      renderPanel();
+      if (c.editPost) {
+        const box = document.getElementById('edit-post-text');
+        box?.focus();
+        box?.setSelectionRange(box.value.length, box.value.length);
+      } else {
+        document.querySelector(`[data-post="${id}"] [data-action="edit-post"]`)?.focus();
+      }
+    }
   } else if (action === 'delete-post') {
     if (!confirm('Delete this announcement?')) return;
     const id = btn.dataset.post;
@@ -2622,6 +2739,14 @@ $app.addEventListener('click', async (ev) => {
     await saving(store.deleteAnnouncement(c.id, id), 'Announcement deleted');
   } else if (action === 'open-file') {
     await openFile(btn.dataset.file, btn.dataset.class);
+  } else if (action === 'delete-link') {
+    const l = lessonById(btn.closest('[data-lesson]').dataset.lesson);
+    const links = lessonLinks(l);
+    const k = links[Number(btn.dataset.index)];
+    if (!k) return;
+    l.links = links.filter((x) => x !== k);
+    renderPanel();
+    await saving(store.saveLesson(c.id, l), 'Link removed');
   } else if (action === 'delete-file') {
     const f = c.files.find((x) => x.id === btn.closest('[data-file]').dataset.file);
     if (!f || !confirm(`Delete ${f.name}? Students won't be able to open it any more.`)) return;
@@ -2967,6 +3092,33 @@ $app.addEventListener('submit', async (ev) => {
     c.tracker.extra.push({ id: `x-${Math.random().toString(36).slice(2, 10)}`, kind: kindOf, title, date, term });
     renderPanel();
     await saveTracker('Column added');
+  } else if (kind === 'add-link') {
+    const l = lessonById(form.dataset.lessonId);
+    if (!l) return;
+    const url = linkUrl(form.elements.linkUrl.value);
+    if (!url) { toast("That isn't a web address. Links start with https:// (or just paste one from your browser).", 'error'); return; }
+    const title = form.elements.linkTitle.value.trim().slice(0, 200);
+    l.links = [...lessonLinks(l), { title, url }].slice(0, MAX_LINKS);
+    renderPanel();
+    document.querySelector('.link-add [name=linkUrl]')?.focus();
+    await saving(store.saveLesson(c.id, l), 'Link added');
+  } else if (kind === 'edit-post') {
+    const id = form.dataset.post;
+    const p = c.posts.find((x) => x.id === id);
+    const text = form.text.value.trim().slice(0, 4000);
+    if (!p || !text) return;
+    c.editPost = null;
+    if (text !== p.text) {
+      const before = { text: p.text, editedAt: p.editedAt };
+      Object.assign(p, { text, editedAt: Date.now() });
+      renderPanel();
+      if (!await saving(store.updateAnnouncement(c.id, id, { text }), 'Announcement updated')) {
+        Object.assign(p, before);
+        renderPanel();
+      }
+    } else {
+      renderPanel();
+    }
   } else if (kind === 'post') {
     const text = form.text.value.trim().slice(0, 4000);
     if (!text) return;
@@ -3196,6 +3348,9 @@ async function saveLibraryOrder() {
   const side = document.querySelector('.lib-side');
   if (!c || !side) return;
   const colours = new Map(c.units.map((u) => [u.id, unitColourIndex(c, u)])); // colours stay put
+  // How things were, so the move can be undone.
+  const unitsBefore = new Map(c.units.map((u, i) => [u.id, { order: u.order ?? i, colour: colours.get(u.id) }]));
+  const lessonsBefore = new Map(c.lessons.map((l) => [l.id, { libOrder: typeof l.libOrder === 'number' ? l.libOrder : null, unitId: unitIdOf(c, l) || null }]));
   const units = [...side.querySelectorAll('.lib-unit')].map((s) => unitById(s.dataset.unit)).filter(Boolean);
   c.units.forEach((u) => { if (!units.includes(u)) units.push(u); });
   const unitChanges = [];
@@ -3230,10 +3385,35 @@ async function saveLibraryOrder() {
   const into = lessonChanges.find((x) => x.moved);
   const msg = into ? `Moved to ${into.l.unitId ? unitById(into.l.unitId).name : 'No unit'}`
     : unitsMoved ? 'Unit order saved' : 'Order saved';
-  await saving(store.saveLibrary(c.id, {
+  const saved = await saving(store.saveLibrary(c.id, {
     units: unitChanges.map((u) => ({ id: u.id, order: u.order, colour: u.colour })),
     lessons: lessonChanges.map(({ l }) => ({ id: l.id, libOrder: l.libOrder, unitId: l.unitId ?? null })),
-  }), msg);
+  }), '');
+  if (!saved) return;
+  const undo = {
+    units: unitChanges.map((u) => ({ id: u.id, ...unitsBefore.get(u.id) })),
+    lessons: lessonChanges.map(({ l }) => ({ id: l.id, ...lessonsBefore.get(l.id) })),
+  };
+  toast(msg, 'ok', () => undoLibraryOrder(c, undo));
+}
+
+// Puts the Lessons tab back to how it was before a drag: unit order and colours, and each
+// moved lesson's place and unit.
+async function undoLibraryOrder(c, undo) {
+  if (state.cls !== c) return;
+  undo.units.forEach((x) => { const u = unitById(x.id); if (u) Object.assign(u, { order: x.order, colour: x.colour }); });
+  undo.lessons.forEach((x) => { const l = lessonById(x.id); if (l) Object.assign(l, { libOrder: x.libOrder, unitId: x.unitId }); });
+  c.units.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const side = document.querySelector('.lib-side');
+  const keep = side ? side.scrollTop : 0;
+  recompute();
+  renderPanel();
+  const again = document.querySelector('.lib-side');
+  if (again) again.scrollTop = keep;
+  await saving(store.saveLibrary(c.id, {
+    units: undo.units.filter((x) => unitById(x.id)),
+    lessons: undo.lessons.filter((x) => lessonById(x.id)),
+  }), 'Move undone');
 }
 
 let libDrag = null;
@@ -3493,6 +3673,37 @@ $app.addEventListener('keydown', async (ev) => {
   await saveClassOrder();
   document.querySelector(`.class-grip[data-id="${grip.dataset.id}"]`)?.focus();
 });
+
+/* ---------- bad Wi-Fi ---------- */
+
+// A bar across the top while the browser has no connection. Firestore keeps working from its
+// offline copy, and anything changed meanwhile saves by itself when the connection is back.
+function showConnection(changed) {
+  let bar = document.getElementById('offline-bar');
+  if (navigator.onLine) {
+    if (bar) bar.remove();
+    if (changed) toast('Back online. Any changes are saving now.');
+    return;
+  }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'offline-bar';
+    bar.className = 'offline-bar';
+    bar.setAttribute('role', 'status');
+    document.body.prepend(bar);
+  }
+  bar.textContent = state.cls && state.cls.isOwner
+    ? "You're offline. You're seeing what was last loaded. Changes you make will save when the connection is back. Files can't be opened or uploaded until then."
+    : "You're offline. You're seeing what was last loaded. Files can't be opened until the connection is back.";
+}
+window.addEventListener('online', () => showConnection(true));
+window.addEventListener('offline', () => showConnection(true));
+showConnection(false);
+
+// Keep a copy of the website itself, so it opens even when the Wi-Fi drops (see sw.js).
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  navigator.serviceWorker.register('sw.js').catch((e) => console.warn('No offline copy of the site', e));
+}
 
 /* ---------- start ---------- */
 

@@ -253,10 +253,17 @@ test('members read units and announcements, only the owner writes them', async (
   await assertFails(getDocs(collection(student('stranger'), 'classes/c1/announcements')));
 });
 
-test('announcements are text only', async () => {
+test('announcements are text only, and can be pinned and edited', async () => {
   const t = teacher('gabe');
   await assertFails(setDoc(doc(t, 'classes/c1/announcements/a3'), { text: '' }));
-  await assertFails(setDoc(doc(t, 'classes/c1/announcements/a4'), { text: 'Hi', pinned: true }));
+  await assertFails(setDoc(doc(t, 'classes/c1/announcements/a4'), { text: 'Hi', colour: 'red' }));
+  await assertFails(setDoc(doc(t, 'classes/c1/announcements/a4'), { text: 'Hi', pinned: 'yes' }));
+  await assertFails(setDoc(doc(t, 'classes/c1/announcements/a4'), { text: 'Hi', editedAt: 'today' }));
+  await assertSucceeds(setDoc(doc(t, 'classes/c1/announcements/a6'), { text: 'Test Friday', createdAt: Date.now() }));
+  await assertSucceeds(updateDoc(doc(t, 'classes/c1/announcements/a6'), { pinned: true }));
+  await assertSucceeds(updateDoc(doc(t, 'classes/c1/announcements/a6'), { text: 'Test Monday', editedAt: Date.now() }));
+  await assertFails(updateDoc(doc(t, 'classes/c1/announcements/a6'), { text: '' }));
+  await assertFails(updateDoc(doc(student('s1'), 'classes/c1/announcements/a6'), { pinned: false }));
   await assertFails(setDoc(doc(t, 'classes/c1/announcements/a5'), { text: 'x'.repeat(4001) }));
   await assertSucceeds(deleteDoc(doc(t, 'classes/c1/announcements/a3')));
 });

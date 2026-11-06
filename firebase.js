@@ -6,7 +6,7 @@ import {
   getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signInAnonymously, signOut,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
-  getFirestore, doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc,
+  getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc,
   writeBatch, query, where, orderBy, limit, serverTimestamp, Timestamp, deleteField, onSnapshot,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import {
@@ -17,16 +17,41 @@ import { newKey } from './keys.js';
 import { emptyPlan } from './planner.js';
 import { templateCopy } from './template.js';
 
+// Firestore keeps a copy of what's been loaded in this browser (IndexedDB), so a class still
+// opens on bad Wi-Fi and changes made offline save by themselves when the connection is back.
+// Where IndexedDB isn't available (some private windows) it keeps data in memory only.
+function openFirestore(app) {
+  try {
+    if (typeof indexedDB !== 'undefined') {
+      return initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) });
+    }
+  } catch (e) {
+    console.warn('No offline copy in this browser', e);
+  }
+  return getFirestore(app);
+}
+
 export function createFirebaseStore(config) {
   const app = initializeApp(config);
   const auth = getAuth(app);
-  const db = getFirestore(app);
+  const db = openFirestore(app);
   const storage = getStorage(app);
   const fileRef = (classId, f) => ref(storage, `classes/${classId}/files/${f.id}/${storageName(f.name)}`);
   // Firestore keeps unlockAt as a Timestamp; the app uses milliseconds.
   const fileFromDoc = (d) => {
     const data = d.data();
     return { id: d.id, ...data, unlockAt: data.unlockAt ? data.unlockAt.toMillis() : null };
+  };
+  // An announcement: createdAt is a server Timestamp; editedAt is milliseconds.
+  const postFromDoc = (d) => {
+    const data = d.data();
+    return {
+      id: d.id,
+      text: data.text,
+      createdAt: data.createdAt ? data.createdAt.toMillis() : Date.now(),
+      pinned: !!data.pinned,
+      editedAt: typeof data.editedAt === 'number' ? data.editedAt : null,
+    };
   };
   // The lock settings are also written onto the stored file (custom metadata), because the
   // Storage rules may only look at two Firestore documents per request and the membership
@@ -296,16 +321,22 @@ export function createFirebaseStore(config) {
 
     async getAnnouncements(id) {
       const snap = await getDocs(query(collection(db, 'classes', id, 'announcements'), orderBy('createdAt', 'desc'), limit(50)));
-      return snap.docs.map((d) => {
-        const data = d.data();
-        return { id: d.id, text: data.text, createdAt: data.createdAt ? data.createdAt.toMillis() : Date.now() };
-      });
+      return snap.docs.map(postFromDoc);
     },
 
     async addAnnouncement(id, text) {
       const ref = doc(collection(db, 'classes', id, 'announcements'));
       await setDoc(ref, { text, createdAt: serverTimestamp() });
       return { id: ref.id, text, createdAt: Date.now() };
+    },
+
+    // patch: { text } (marks it edited) and/or { pinned }.
+    async updateAnnouncement(id, postId, patch) {
+      const data = {};
+      if (patch.text !== undefined) { data.text = patch.text; data.editedAt = Date.now(); }
+      if (patch.pinned !== undefined) data.pinned = !!patch.pinned;
+      await updateDoc(doc(db, 'classes', id, 'announcements', postId), data);
+      return data;
     },
 
     deleteAnnouncement(id, postId) {
@@ -480,10 +511,7 @@ export function createFirebaseStore(config) {
       listen(query(collection(db, 'classes', id, 'lessons'), orderBy('order')), 'lessons', (snap) => snap.docs.map((d) => ({ id: d.id, ...d.data() })));
       listen(query(collection(db, 'classes', id, 'units'), orderBy('order')), 'units', (snap) => snap.docs.map((d) => ({ id: d.id, ...d.data() })));
       listen(collection(db, 'classes', id, 'files'), 'files', (snap) => snap.docs.map(fileFromDoc));
-      listen(query(collection(db, 'classes', id, 'announcements'), orderBy('createdAt', 'desc'), limit(50)), 'posts', (snap) => snap.docs.map((d) => {
-        const data = d.data();
-        return { id: d.id, text: data.text, createdAt: data.createdAt ? data.createdAt.toMillis() : Date.now() };
-      }));
+      listen(query(collection(db, 'classes', id, 'announcements'), orderBy('createdAt', 'desc'), limit(50)), 'posts', (snap) => snap.docs.map(postFromDoc));
       return () => offs.forEach((off) => off());
     },
 

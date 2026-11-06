@@ -147,12 +147,15 @@ test('a student cannot use an import record to open teacher-only files', async (
 
 /* ---------- writing ---------- */
 
-test('the teacher uploads PDF, PowerPoint, Word and pictures', async () => {
+test('the teacher uploads PDF, PowerPoint, Word, Excel, GeoGebra, video and pictures', async () => {
   const st = teacher('gabe').storage();
   const types = [
     PDF,
     'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.geogebra.file',
+    'video/mp4',
     'image/png', 'image/jpeg',
   ];
   for (const [i, contentType] of types.entries()) {
@@ -164,6 +167,8 @@ test('other file types and files over 50 MB are refused', async () => {
   const st = teacher('gabe').storage();
   await assertFails(uploadBytes(ref(st, path('x', 'run.exe')), bytes, { contentType: 'application/x-msdownload' }));
   await assertFails(uploadBytes(ref(st, path('x', 'page.html')), bytes, { contentType: 'text/html' }));
+  await assertFails(uploadBytes(ref(st, path('x', 'film.mov')), bytes, { contentType: 'video/quicktime' }));
+  await assertFails(uploadBytes(ref(st, path('x', 'macro.xlsm')), bytes, { contentType: 'application/vnd.ms-excel.sheet.macroEnabled.12' }));
   await assertFails(uploadBytes(ref(st, path('x', 'big.pdf')), new Uint8Array(50 * 1024 * 1024 + 1), { contentType: PDF }));
 });
 

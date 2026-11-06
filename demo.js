@@ -293,6 +293,16 @@ export function createDemoStore() {
       persist();
       return { ...post };
     },
+    async updateAnnouncement(id, postId, patch) {
+      const post = (data.announcements[id] || []).find((p) => p.id === postId);
+      if (!post) throw new Error('That announcement has been deleted.');
+      const out = {};
+      if (patch.text !== undefined) { out.text = patch.text; out.editedAt = Date.now(); }
+      if (patch.pinned !== undefined) out.pinned = !!patch.pinned;
+      Object.assign(post, out);
+      persist();
+      return out;
+    },
     async deleteAnnouncement(id, postId) {
       data.announcements[id] = data.announcements[id].filter((p) => p.id !== postId);
       persist();

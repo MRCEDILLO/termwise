@@ -56,6 +56,7 @@ input, select, textarea, button { font: inherit; color: inherit; }
 .loading { padding: 64px 16px; text-align: center; color: var(--ink-2); }
 
 /* ---------- top bar ---------- */
+.offline-bar { position: sticky; top: 0; z-index: 30; background: var(--ink); color: #fff; text-align: center; font-size: .88rem; font-weight: 700; padding: 6px 16px; }
 .demo-strip { background: var(--warn-soft); color: #6B4E00; text-align: center; font-size: .88rem; padding: 6px 16px; border-bottom: 1px solid #F1DE9C; }
 .topbar {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -546,6 +547,14 @@ label.inline select { width: auto; margin: 0; padding: 6px 10px; }
 .post-who { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 .post-who time { font-size: .82rem; color: var(--ink-2); }
 .post-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.post-tools { flex: none; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.post.pinned { border-left: 4px solid var(--primary); }
+.pin-tag { background: var(--primary); color: #fff; margin-left: 4px; }
+.link-add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+.link-add input { margin: 0; flex: 1 1 220px; min-width: 0; }
+.link-add input[name=linkTitle] { flex: 1 1 140px; }
+.link-icon { background: var(--ink-2); }
+a.file-chip { color: inherit; text-decoration: none; }
 .home-side { display: grid; gap: 16px; }
 .home-card h2 { margin-bottom: 8px; }
 .info { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 14px; margin: 0 0 10px; }
@@ -614,6 +623,9 @@ dialog form { display: grid; gap: 14px; }
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast.error { background: var(--bad); }
+.toast.has-undo { pointer-events: auto; display: flex; align-items: center; gap: 12px; padding-right: 8px; }
+.toast-undo { font: inherit; font-weight: 800; color: #fff; background: rgba(255,255,255,.18); border: 0; border-radius: 999px; padding: 4px 14px; cursor: pointer; }
+.toast-undo:hover, .toast-undo:focus-visible { background: rgba(255,255,255,.32); outline: 2px solid #fff; outline-offset: 1px; }
 
 /* ---------- phone ---------- */
 @media (max-width: 760px) {
