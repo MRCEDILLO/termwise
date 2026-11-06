@@ -592,6 +592,11 @@ dialog .check input { flex: none; margin-top: 2px; }
 .unlock-auto { font-size: .82rem; color: var(--ink-2); font-weight: 700; }
 .open-after { white-space: normal; }
 .lesson-files .open-after + .hint { margin: -6px 0 0; font-size: .85rem; }
+/* Class files on Home: the side column is narrow, so each file's name fills its row (with
+   delete beside it) and the teacher-only settings go underneath, as on a phone. */
+.class-files .file-row .file-chip { flex: 1 1 calc(100% - 48px); }
+.class-files .file-row > :not(.file-chip):not([data-action="delete-file"]) { order: 1; }
+.class-files .file-links { margin: 0; }
 .builder-foot { justify-content: flex-start; }
 .builder-foot .danger-btn { margin-left: auto; }
 

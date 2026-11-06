@@ -4,7 +4,7 @@
 import { FIREBASE_CONFIG, SITE_NAME, ADMIN_EMAIL } from './config.js';
 import { createDemoStore } from './demo.js';
 import { normaliseKey, formatKey } from './keys.js';
-import { ACCEPT, fileProblem, isOpen, fileSize, fileIcon } from './files.js';
+import { ACCEPT, CLASS_FILES, fileProblem, isOpen, fileSize, fileIcon } from './files.js';
 import {
   schedule, emptyPlan, isAssessmentLike, lessonKind, currentWeek, weekRange, slotLabel, cellText, slotDate, daySessions, homeworkDue,
   DAYS, PERIODS_PER_DAY, MAX_WEEKS, TERM_COUNT, clampWeeks,
@@ -1427,11 +1427,27 @@ function homePanel(c) {
           ${cls.about ? html`<p class="about">${linkify(cls.about)}</p>` : ''}
           ${c.isOwner && (!contact || !cls.about) ? html`<p class="hint">Add ${[!contact && 'your contact details', !cls.about && 'a short description'].filter(Boolean).join(' and ')} on the <a href="#/class/${c.id}/setup">Setup</a> tab.</p>` : ''}
         </section>
+        ${classFilesCard(c)}
         ${upNextCard(c)}
         ${homeworkCard(c)}
         ${comingUpCard(c)}
       </aside>
     </div>`;
+}
+
+// Files for the whole class, such as the year's lecture notes, under Class information.
+// Stored like lesson files (see CLASS_FILES), so teacher-only and unlock dates work the same way.
+function classFilesCard(c) {
+  const has = filesFor(c, CLASS_FILES).length || c.uploads.some((u) => u.lessonId === CLASS_FILES);
+  if (!c.isOwner && !has) return '';
+  return html`
+    <section class="card home-card class-files">
+      <h2>Class files</h2>
+      ${c.isOwner ? html`
+        ${has ? '' : html`<p class="hint">Files for the whole year, such as lecture notes, a formula sheet or the course outline. Students can open them here any time.</p>`}
+        ${teacherFiles(c, { id: CLASS_FILES })}`
+        : studentFiles(c, CLASS_FILES)}
+    </section>`;
 }
 
 /* ---------- week calendar: days across, periods down, flip between weeks ---------- */
@@ -1613,6 +1629,7 @@ function syncAfterLesson(c) {
 }
 
 // Files in the lesson builder: attach, mark teacher-only, set an unlock date or unlock now.
+// Also the Class files card on Home, with l = { id: CLASS_FILES } (no "after the lesson" option).
 function teacherFiles(c, l) {
   const ups = c.uploads.filter((u) => u.lessonId === l.id);
   // A file still uploading shows as its progress row only.
@@ -1639,7 +1656,7 @@ function teacherFiles(c, l) {
         ${ups.map((u) => html`<li class="file-row uploading"><span class="file-chip"><span class="file-icon" aria-hidden="true">${fileIcon(u.name)}</span>
           <span class="file-name">${u.name}</span><span class="file-size" id="up-${u.key}">Uploading ${Math.round(u.pct * 100)}%</span></span></li>`)}
       </ul>` : ''}
-      ${files.some((f) => f.locked) || auto ? html`
+      ${(files.some((f) => f.locked) || auto) && l.id !== CLASS_FILES ? html`
         <label class="check open-after"><input type="checkbox" data-lfield="openAfter" ${raw(auto ? 'checked' : '')}>
           Open teacher-only files after the lesson</label>
         <p class="hint">${auto
