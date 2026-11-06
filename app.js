@@ -4,7 +4,8 @@
 import { FIREBASE_CONFIG, SITE_NAME, ADMIN_EMAIL } from './config.js';
 import { createDemoStore } from './demo.js';
 import { normaliseKey, formatKey } from './keys.js';
-import { ACCEPT, CLASS_FILES, fileProblem, isOpen, fileSize, fileIcon } from './files.js';
+import { ACCEPT, fileProblem, isOpen, fileSize, fileIcon } from './files.js';
+import { CLASS_FILES } from './files.js';
 import {
   schedule, emptyPlan, isAssessmentLike, lessonKind, currentWeek, weekRange, slotLabel, cellText, slotDate, daySessions, homeworkDue,
   DAYS, PERIODS_PER_DAY, MAX_WEEKS, TERM_COUNT, clampWeeks,
