@@ -221,7 +221,7 @@ legend { font-weight: 700; font-size: .92rem; color: var(--ink-2); margin-bottom
 
 
 /* ---------- term picker ---------- */
-.term-picker { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; }
+.term-picker { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; }
 .term-picker button {
   display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 14px;
   border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface); cursor: pointer; text-align: left;
@@ -634,6 +634,7 @@ dialog form { display: grid; gap: 14px; }
   .file-row .file-chip { flex: 1 1 calc(100% - 48px); }
   .file-row > :not(.file-chip):not([data-action="delete-file"]) { order: 1; }
   .term-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .term-picker .tp-events { grid-column: 1 / -1; }
   .lesson-meta { padding: 0 8px; }
   .terms-table th { white-space: nowrap; }
   .events thead { display: none; }

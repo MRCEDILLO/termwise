@@ -924,16 +924,21 @@ const statusText = (l) => ({ skipped: 'Skipped', noroom: `No room in Term ${l.te
 
 function termPicker(c) {
   return html`
-    <div class="term-picker" role="group" aria-label="Choose a term">
+    <div class="term-picker" role="group" aria-label="Choose a term, or events">
       ${c.result.perTerm.map((t) => html`
-        <button class="${t.term === c.editTerm ? 'on' : ''}" aria-pressed="${t.term === c.editTerm}" data-action="pick-term" data-term="${t.term}">
+        <button class="${!c.planEvents && t.term === c.editTerm ? 'on' : ''}" aria-pressed="${!c.planEvents && t.term === c.editTerm}" data-action="pick-term" data-term="${t.term}">
           <span class="tp-name">Term ${t.term}</span>
           <span class="tp-meta">${plural(t.lessons, 'lesson')}${t.fits ? '' : html` · <span class="tp-short">short ${-t.spare}</span>`}</span>
         </button>`)}
+      <button class="tp-events ${c.planEvents ? 'on' : ''}" aria-pressed="${!!c.planEvents}" data-action="pick-events">
+        <span class="tp-name">Events</span>
+        <span class="tp-meta">${plural(c.plan.events.length, 'event')}</span>
+      </button>
     </div>`;
 }
 
 function plannerPanel(c) {
+  if (c.planEvents) return html`<div class="panel-head"><h2>Planner</h2></div>${termPicker(c)}${eventsPanel(c)}`;
   const r = c.result;
   const t = r.perTerm[c.editTerm - 1];
   const mine = r.lessons.filter((l) => l.term === c.editTerm);
@@ -2265,11 +2270,10 @@ async function pasteMarks(el, text) {
 function setupPanel(c) {
   const p = c.plan;
   const pat = new Set(p.pattern);
-  const opt = (v, label, sel) => html`<option value="${v}" ${raw(String(v) === String(sel) ? 'selected' : '')}>${label}</option>`;
   const nums = (n) => Array.from({ length: n }, (_, i) => i + 1);
   return html`
     <div class="setup-grid">
-      <!-- Two columns that stack separately: details and meeting times on the left; terms, key and archive on the right. -->
+      <!-- Two columns that stack separately: details, meeting times and sharing on the left; terms, class key, downloads and archive on the right. -->
       <div class="setup-col">
         <section class="card">
           <h2>Class details</h2>
@@ -2316,6 +2320,21 @@ function setupPanel(c) {
             </table>
           </div>
         </section>
+
+        <section class="card">
+          <h2>Share with other teachers</h2>
+          ${c.cls.copyKey ? html`
+            <p class="hint">Another teacher types this copy key under <strong>New class</strong> to get their own copy of your lessons, units, files (teacher-only ones too) and planner. It doesn't let anyone into this class, and it isn't the key your students use.</p>
+            <p class="big-key mono">${formatKey(c.cls.copyKey)}</p>
+            <div class="row">
+              <button class="btn" data-action="copy-copykey">Copy key</button>
+              <button class="btn" data-action="copy-share" data-value="new">Make a new copy key</button>
+              <button class="btn danger-btn" data-action="copy-share" data-value="off">Stop sharing</button>
+            </div>`
+          : html`
+            <p class="hint">Other teachers can't copy this class. Turn sharing on to get a copy key, separate from your students' key, that you can give a colleague.</p>
+            <button class="btn" data-action="copy-share" data-value="on">Let other teachers copy this class</button>`}
+        </section>
       </div>
 
       <div class="setup-col">
@@ -2347,21 +2366,6 @@ function setupPanel(c) {
         </section>
 
         <section class="card">
-          <h2>Share with other teachers</h2>
-          ${c.cls.copyKey ? html`
-            <p class="hint">Another teacher types this copy key under <strong>New class</strong> to get their own copy of your lessons, units, files (teacher-only ones too) and planner. It doesn't let anyone into this class, and it isn't the key your students use.</p>
-            <p class="big-key mono">${formatKey(c.cls.copyKey)}</p>
-            <div class="row">
-              <button class="btn" data-action="copy-copykey">Copy key</button>
-              <button class="btn" data-action="copy-share" data-value="new">Make a new copy key</button>
-              <button class="btn danger-btn" data-action="copy-share" data-value="off">Stop sharing</button>
-            </div>`
-          : html`
-            <p class="hint">Other teachers can't copy this class. Turn sharing on to get a copy key, separate from your students' key, that you can give a colleague.</p>
-            <button class="btn" data-action="copy-share" data-value="on">Let other teachers copy this class</button>`}
-        </section>
-
-        <section class="card">
           <h2>Download</h2>
           <p class="hint">Spreadsheet files (CSV) that open in Excel. The marks file has every student's assessment marks, averages and homework for the whole year, ready for Compass or your records.</p>
           <div class="row">
@@ -2382,33 +2386,40 @@ function setupPanel(c) {
             : html`<p class="hint">Archiving closes the class to students at once. You can still open it and restore it. An archived class can also be deleted.</p><button class="btn danger-btn" data-action="archive" data-value="1">Archive class</button>`}
         </section>
       </div>
-
-      <section class="card span2">
-        <h2>Events and blocked time</h2>
-        <p class="hint">Camps, excursions and public holidays. Choose <strong>All</strong> to block a whole day or week. Students see these as Cancelled and lessons move later.</p>
-        ${p.events.length ? html`
-          <div class="table-scroll">
-            <table class="events">
-              <thead><tr><th scope="col">Term</th><th scope="col">Week</th><th scope="col">Day</th><th scope="col">Period</th><th scope="col">What's happening</th><th></th></tr></thead>
-              <tbody>
-                ${p.events.map((e, i) => html`<tr data-event="${i}">
-                  <td data-label="Term"><select data-field="term" aria-label="Term">${nums(TERM_COUNT).map((n) => opt(n, n, e.term))}</select></td>
-                  <td data-label="Week"><select data-field="week" aria-label="Week">${nums(MAX_WEEKS).map((n) => opt(n, n, e.week))}</select></td>
-                  <td data-label="Day"><select data-field="day" aria-label="Day">${opt('All', 'All', e.day)}${nums(5).map((n) => opt(n, DAYS[n - 1], e.day))}</select></td>
-                  <td data-label="Period"><select data-field="period" aria-label="Period">${opt('All', 'All', e.period)}${nums(PERIODS_PER_DAY).map((n) => opt(n, n, e.period))}</select></td>
-                  <td><input data-field="label" value="${e.label}" maxlength="80" aria-label="What's happening"></td>
-                  <td><button class="icon-btn danger" data-action="delete-event" aria-label="Remove event">✕</button></td>
-                </tr>`)}
-              </tbody>
-            </table>
-          </div>` : html`<p class="empty small">No events yet.</p>`}
-        <div class="row">
-          <button class="btn" data-action="add-event">Add event</button>
-          <button class="btn" data-action="import-events">Import from another class</button>
-        </div>
-        ${c.importFrom ? importEventsDialog(c) : ''}
-      </section>
     </div>`;
+}
+
+// The Planner's Events view: camps, excursions and holidays that block periods.
+function eventsPanel(c) {
+  const p = c.plan;
+  const opt = (v, label, sel) => html`<option value="${v}" ${raw(String(v) === String(sel) ? 'selected' : '')}>${label}</option>`;
+  const nums = (n) => Array.from({ length: n }, (_, i) => i + 1);
+  return html`
+    <section class="card">
+      <h2>Events and blocked time</h2>
+      <p class="hint">Camps, excursions and public holidays. Choose <strong>All</strong> to block a whole day or week. Students see these as Cancelled and lessons move later.</p>
+      ${p.events.length ? html`
+        <div class="table-scroll">
+          <table class="events">
+            <thead><tr><th scope="col">Term</th><th scope="col">Week</th><th scope="col">Day</th><th scope="col">Period</th><th scope="col">What's happening</th><th></th></tr></thead>
+            <tbody>
+              ${p.events.map((e, i) => html`<tr data-event="${i}">
+                <td data-label="Term"><select data-field="term" aria-label="Term">${nums(TERM_COUNT).map((n) => opt(n, n, e.term))}</select></td>
+                <td data-label="Week"><select data-field="week" aria-label="Week">${nums(MAX_WEEKS).map((n) => opt(n, n, e.week))}</select></td>
+                <td data-label="Day"><select data-field="day" aria-label="Day">${opt('All', 'All', e.day)}${nums(5).map((n) => opt(n, DAYS[n - 1], e.day))}</select></td>
+                <td data-label="Period"><select data-field="period" aria-label="Period">${opt('All', 'All', e.period)}${nums(PERIODS_PER_DAY).map((n) => opt(n, n, e.period))}</select></td>
+                <td><input data-field="label" value="${e.label}" maxlength="80" aria-label="What's happening"></td>
+                <td><button class="icon-btn danger" data-action="delete-event" aria-label="Remove event">✕</button></td>
+              </tr>`)}
+            </tbody>
+          </table>
+        </div>` : html`<p class="empty small">No events yet.</p>`}
+      <div class="row">
+        <button class="btn" data-action="add-event">Add event</button>
+        <button class="btn" data-action="import-events">Import from another class</button>
+      </div>
+      ${c.importFrom ? importEventsDialog(c) : ''}
+    </section>`;
 }
 
 // Pick another of your classes and copy its events and blocked time into this one.
@@ -2520,8 +2531,13 @@ $app.addEventListener('click', async (ev) => {
     document.querySelector(action === 'week-goto' ? `[data-pos="${c.weekPos}"]` : `[data-action="${action}"]:not(:disabled)`)?.focus();
   } else if (action === 'pick-term') {
     c.editTerm = Number(btn.dataset.term);
+    c.planEvents = false;
     renderPanel();
     document.querySelector(`[data-action="pick-term"][data-term="${c.editTerm}"]`)?.focus();
+  } else if (action === 'pick-events') {
+    c.planEvents = true;
+    renderPanel();
+    document.querySelector('[data-action="pick-events"]')?.focus();
   } else if (action === 'move') {
     // Shift moves the lesson together with its neighbours from the same unit.
     const id = btn.closest('[data-id]').dataset.id;
@@ -2541,9 +2557,11 @@ $app.addEventListener('click', async (ev) => {
     const l = lessonById(btn.closest('[data-lesson]').dataset.lesson);
     const term = Number(document.getElementById('place-term').value);
     c.editTerm = term;
+    c.planEvents = false;
     await placeLessons([l], term, `Added to Term ${term}`);
   } else if (action === 'goto-term') {
     c.editTerm = Number(btn.dataset.term); // the link then opens the planner
+    c.planEvents = false;
   } else if (action === 'pick-result') {
     await pickResult(Number(btn.dataset.i));
   } else if (action === 'new-lesson') {
