@@ -117,3 +117,15 @@ test('copyToClass keeps the planner order even when the library order differs', 
   }, { units: [], lessons: [] }, (kind) => `${kind}-${++n}`, { onPlanner: true });
   assert.deepEqual(out.lessons.map((l) => [l.title, l.order, l.libOrder]), [['B', 1, 0], ['A', 0, 1]]);
 });
+
+test('web links come across with a lesson, and only http(s) ones', () => {
+  let n = 0;
+  const newId = (kind) => `${kind}${++n}`;
+  const links = [{ title: 'Video', url: 'https://youtube.com/watch?v=1' }, { title: 'Bad', url: 'javascript:alert(1)' }];
+  const lessons = [{ id: 'a', title: 'A', links }, { id: 'b', title: 'B' }];
+  const t = templateCopy({ lessons }, newId);
+  assert.deepEqual(t.lessons[0].links, [{ title: 'Video', url: 'https://youtube.com/watch?v=1' }]);
+  assert.equal('links' in t.lessons[1], false);
+  const c = copyToClass({ lessons: [lessons[0]] }, { units: [], lessons: [] }, newId);
+  assert.deepEqual(c.lessons[0].links, [{ title: 'Video', url: 'https://youtube.com/watch?v=1' }]);
+});

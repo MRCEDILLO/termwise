@@ -63,7 +63,7 @@ npm test
 
 1. Foundations: sign-in, classes, keys, security rules with tests. **Done**
 2. Live planner: terms, meeting pattern, events, drag-and-drop lessons, auto-schedule, capacity banner, student lesson list and timetable. **Done**
-3. Materials: uploads per lesson (PDF, PowerPoint, Word, pictures, up to 50 MB), downloads, teacher-only files that open on a date or when the teacher flips the switch. **Done**
+3. Materials: uploads per lesson (PDF, PowerPoint, Word, Excel, GeoGebra, short MP4 videos, pictures, up to 50 MB), downloads, teacher-only files that open on a date or when the teacher flips the switch. **Done**
    - Class page overhaul: a Home tab (class details, teacher contact, announcements, this week, coming up), a Lessons library of units and lessons with a lesson builder, and a Planner that searches the library to fill each term. Shift-drag moves a run of lessons from one unit together. **Done**
 4. Tracker and reports: class list (names only), a grading scale per class (the 6-level standards by default), assessment marks and homework ticks with a column for every lesson ticked Assessment or Homework, and three printable reports (student, class summary, assessment analysis). Only the class's teacher can read any of it. **Done**
    - Teacher home shows **Today and the next school day** across every class, with each lesson's files one click away. **Copy to another class** (in the lesson builder) sends a lesson or its whole unit, with files, to another of your classes. A lesson can **open its teacher-only files after the lesson** (4 pm on the day of its last period), and the unlock moves when the planner moves the lesson. Open class pages **update live** when something changes elsewhere, so two devices (or a teacher and a student) never work from stale data. None of this needs a rules change. **Done**
@@ -72,3 +72,9 @@ npm test
    - Setup downloads the lesson list with dates and the year's marks as spreadsheet files (CSV), and an archived class can be deleted for good.
    - Students' Home tab lists homework and when it's due (the next lesson after the homework lesson).
    - Events and blocked time live on the Planner, in an **Events** tab next to Term 1 to 4 (with Import from another class). Setup keeps class details, meeting times, terms, keys, downloads and archive.
+6. Classroom polish. **Done**
+   - Lessons can hold **web links** (a video, a Desmos activity, a shared document) next to their files. Only http and https links are kept.
+   - Files can also be **Excel (.xlsx), GeoGebra (.ggb) and short MP4 videos**. Needs storage.rules republished.
+   - **Bad Wi-Fi**: the site keeps a copy of itself (sw.js) and Firestore keeps a copy of each class that's been opened, so pages still open offline. A bar says when you're offline, and changes save by themselves when the connection is back. Files need a connection.
+   - Teachers can **edit and pin announcements**. Pinned ones stay at the top. Needs firestore.rules republished.
+   - Dragging lessons on the planner or the Lessons tab shows an **Undo** button for a few seconds (Ctrl+Z works too).

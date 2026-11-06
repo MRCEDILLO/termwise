@@ -218,10 +218,13 @@ service cloud.firestore {
       }
       match /announcements/{postId} {
         allow read: if isOwner(classId) || isMember(classId);
+        // Text, when it was posted, whether it's pinned to the top, and when it was last edited.
         allow create, update: if isOwner(classId)
-          && request.resource.data.keys().hasOnly(['text', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['text', 'createdAt', 'pinned', 'editedAt'])
           && request.resource.data.text is string
-          && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 4000;
+          && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 4000
+          && (!('pinned' in request.resource.data) || request.resource.data.pinned is bool)
+          && (!('editedAt' in request.resource.data) || request.resource.data.editedAt is int);
         allow delete: if isOwner(classId);
       }
 

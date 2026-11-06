@@ -24,7 +24,7 @@ before(async () => {
     .replace("'./planner.js'", `'${new URL('../planner.js', import.meta.url)}'`)
     .replace("'./template.js'", `'${new URL('../template.js', import.meta.url)}'`)
     .replace('initializeApp(config)', 'initializeApp(config, config.appName)')
-    .replace('const db = getFirestore(app);', `const db = getFirestore(app);
+    .replace('const db = openFirestore(app);', `const db = openFirestore(app);
   connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
   connectFirestoreEmulator(db, '127.0.0.1', 8080);`)
     .replace('const storage = getStorage(app);', `const storage = getStorage(app);
@@ -34,7 +34,7 @@ before(async () => {
 import { connectFirestoreEmulator } from 'firebase/firestore';
 import { connectStorageEmulator } from 'firebase/storage';
 ${src}`;
-  for (const needle of ['firebase/app', 'firebase/storage', 'connectStorageEmulator(storage', 'connectAuthEmulator(auth', 'signInWithCredential(auth', 'config.appName']) {
+  for (const needle of ['firebase/app', 'connectFirestoreEmulator(db', 'firebase/storage', 'connectStorageEmulator(storage', 'connectAuthEmulator(auth', 'signInWithCredential(auth', 'config.appName']) {
     assert.ok(src.includes(needle), `patch failed: ${needle}`);
   }
   mkdirSync(new URL('.tmp/', here), { recursive: true });

@@ -31,6 +31,8 @@ export function templateCopy({ units = [], lessons = [], files = [] }, newId) {
     };
     if (typeof l.libOrder === 'number') copy.libOrder = l.libOrder;
     if (l.openAfter) copy.openAfter = true;
+    const links = copyLinks(l.links);
+    if (links.length) copy.links = links;
     return copy;
   });
 
@@ -49,6 +51,13 @@ export function templateCopy({ units = [], lessons = [], files = [] }, newId) {
   }));
 
   return { units: newUnits, lessons: newLessons, files: newFiles };
+}
+
+// A lesson's web links, copied as plain { title, url } pairs.
+function copyLinks(links) {
+  return (Array.isArray(links) ? links : [])
+    .filter((k) => k && typeof k.url === 'string' && /^https?:\/\//i.test(k.url))
+    .map((k) => ({ title: String(k.title || ''), url: k.url }));
 }
 
 // Copying one lesson, or a whole unit, into another of the teacher's classes.
@@ -100,6 +109,8 @@ export function copyToClass({ unit = null, lessons = [], files = [], unitName = 
       libOrder: libOrder++,
     };
     if (l.openAfter) copy.openAfter = true;
+    const links = copyLinks(l.links);
+    if (links.length) copy.links = links;
     return copy;
   });
 

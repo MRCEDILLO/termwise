@@ -42,7 +42,7 @@ service firebase.storage {
     // PDF, PowerPoint, Word and common pictures, up to 50 MB (see files.js).
     function allowedUpload() {
       return request.resource.size > 0 && request.resource.size <= 50 * 1024 * 1024
-        && request.resource.contentType.matches('application/pdf|application/vnd[.]openxmlformats-officedocument[.](presentationml[.]presentation|wordprocessingml[.]document)|image/(png|jpeg|gif|webp)');
+        && request.resource.contentType.matches('application/pdf|application/vnd[.]openxmlformats-officedocument[.](presentationml[.]presentation|wordprocessingml[.]document|spreadsheetml[.]sheet)|application/vnd[.]geogebra[.]file|video/mp4|image/(png|jpeg|gif|webp)');
     }
 
     // Who may open a file. Written so that each kind of reader costs at most two Firestore
