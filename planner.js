@@ -278,3 +278,24 @@ export function daySessions(result, dateISO) {
   }
   return out;
 }
+
+// Homework students still have to hand in, from a schedule() result: lessons ticked Homework,
+// each due at the class's next lesson after the homework lesson's last period (null when the
+// class doesn't meet again that term). Lists homework set up to `aheadDays` from today whose due
+// date hasn't passed, soonest first.
+//   [{ lesson, set: 'YYYY-MM-DD', due: 'YYYY-MM-DD' | null }]
+export function homeworkDue(result, todayISO, { aheadDays = 14 } = {}) {
+  if (!result || !todayISO) return [];
+  const limit = toISO(parseISO(todayISO) + aheadDays * DAY_MS);
+  const out = [];
+  for (const l of result.lessons) {
+    if (!l.homework || !l.end || !l.end.date) continue;
+    const set = l.end.date;
+    if (set > limit) continue;
+    const next = result.slots.find((s) => s.term === l.end.term && !s.blocked && s.date && s.date > set);
+    const due = next ? next.date : null;
+    if ((due || set) < todayISO) continue;
+    out.push({ lesson: l, set, due });
+  }
+  return out.sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999') || a.set.localeCompare(b.set));
+}

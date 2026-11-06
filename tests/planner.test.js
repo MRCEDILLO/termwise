@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  schedule, emptyPlan, currentWeek, cellText, isAssessmentLike, isRevisionLike, lessonKind, termMonday, slotDate, daySessions,
+  schedule, emptyPlan, currentWeek, cellText, isAssessmentLike, isRevisionLike, lessonKind, termMonday, slotDate, daySessions, homeworkDue,
 } from '../planner.js';
 
 // Mon P1, Wed P3, Fri P5: 3 meetings a week.
@@ -164,4 +164,22 @@ test('daySessions lists one day in period order, joining back-to-back periods', 
   assert.deepEqual(daySessions(r, '2027-02-08').map((s) => [s.from, s.to, s.lesson.title]), [[2, 3, 'B']]);
   assert.deepEqual(daySessions(r, '2027-02-06'), [], 'a Saturday has nothing');
   assert.deepEqual(daySessions(null, '2027-02-01'), []);
+});
+
+test('homeworkDue: due at the next lesson after the homework lesson, soonest first, past ones dropped', () => {
+  const plan = emptyPlan();
+  plan.terms = [{ start: '2027-02-01', weeks: 3 }, { start: '', weeks: 0 }, { start: '', weeks: 0 }, { start: '', weeks: 0 }];
+  plan.pattern = ['1-1', '3-1']; // Mon and Wed
+  plan.events = [{ id: 'e', term: 1, week: 2, day: 1, period: 'All', label: 'Holiday' }];
+  const r = schedule(plan, [
+    L('A', 1, { homework: true }), // Mon 1 Feb, due Wed 3 Feb
+    L('B', 1), // Wed 3 Feb
+    L('C', 1, { homework: true }), // Wed 10 Feb (Mon 8 Feb is a holiday), due Mon 15 Feb
+    L('D', 2, { homework: true }), // Mon 15 + Wed 17 Feb: the last lessons, so no next lesson this term
+  ]);
+  const at = (today, opts) => homeworkDue(r, today, opts).map((h) => [h.lesson.title, h.set, h.due]);
+  assert.deepEqual(at('2027-02-01'), [['A', '2027-02-01', '2027-02-03'], ['C', '2027-02-10', '2027-02-15']]);
+  assert.deepEqual(at('2027-02-04'), [['C', '2027-02-10', '2027-02-15'], ['D', '2027-02-17', null]], 'A is past');
+  assert.deepEqual(at('2027-02-01', { aheadDays: 3 }), [['A', '2027-02-01', '2027-02-03']], 'far-off homework waits');
+  assert.deepEqual(at('2027-02-20'), [], 'nothing left: D, with no due date, drops once set day passes');
 });

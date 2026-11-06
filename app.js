@@ -6,12 +6,12 @@ import { createDemoStore } from './demo.js';
 import { normaliseKey, formatKey } from './keys.js';
 import { ACCEPT, fileProblem, isOpen, fileSize, fileIcon } from './files.js';
 import {
-  schedule, emptyPlan, isAssessmentLike, lessonKind, currentWeek, weekRange, slotLabel, cellText, slotDate, daySessions,
+  schedule, emptyPlan, isAssessmentLike, lessonKind, currentWeek, weekRange, slotLabel, cellText, slotDate, daySessions, homeworkDue,
   DAYS, PERIODS_PER_DAY, MAX_WEEKS, TERM_COUNT, clampWeeks,
 } from './planner.js';
 import {
   emptyTracker, defaultScale, manualLevels, trackerColumns, inTerms, parseScore, result, studentSummary,
-  assessmentSummary, homeworkSummary, classHomework, parseNames, sortStudents, scaleProblem,
+  assessmentSummary, homeworkSummary, classHomework, parseNames, sortStudents, scaleProblem, csvText, marksRows,
 } from './tracker.js';
 import { importEvents, copyToClass } from './template.js';
 
@@ -517,15 +517,15 @@ function newClassDialog(classes = []) {
           <select name="template">
             <option value="">A blank class</option>
             ${classes.map((c) => html`<option value="${c.id}">Copy of ${c.name}${c.archived ? ' (archived)' : ''}</option>`)}
-            <option value="key">Copy another teacher's class, using its key</option>
+            <option value="key">Copy another teacher's class, using its copy key</option>
           </select>
         </label>
-        <label class="import-key" hidden>Their class key
+        <label class="import-key" hidden>Their copy key
           <input name="importKey" autocomplete="off" autocapitalize="characters" spellcheck="false"
             placeholder="ABCD-2345" maxlength="12">
         </label>
         <p class="hint" data-from-hint="copy" ${raw(classes.length ? '' : 'hidden')}>A copy brings across the lessons, units, lesson files and where each lesson sits on the planner. Students, marks, announcements, term dates and the timetable are not copied.</p>
-        <p class="hint" data-from-hint="key" hidden>Ask the other teacher for their class key (the one their students join with). You get your own copy of their lessons, units, lesson files and planner, teacher-only files included. It's yours alone to change: nothing you do touches their class, and their later changes don't reach yours.</p>
+        <p class="hint" data-from-hint="key" hidden>Ask the other teacher for their class's copy key, from <strong>Share with other teachers</strong> on their Setup tab. The key their students join with won't work. You get your own copy of their lessons, units, lesson files and planner, teacher-only files included. It's yours alone to change: nothing you do touches their class, and their later changes don't reach yours.</p>
         <p class="form-msg" aria-live="polite"></p>
         <label>Class name <input name="name" required maxlength="80" placeholder="8A Maths"></label>
         <div class="row2">
@@ -1357,6 +1357,24 @@ function upNextCard(c) {
     </section>`;
 }
 
+// Homework set in the next fortnight or not yet due, with when it's due (the next lesson after it).
+function homeworkCard(c) {
+  const today = todayISO();
+  const list = homeworkDue(c.result, today).slice(0, 5);
+  if (!list.length) return '';
+  const dueText = (h) => (!h.due ? 'Due next lesson' : h.due === today ? 'Due today' : `Due ${fmtDay(h.due)}`);
+  return html`
+    <section class="card home-card">
+      <h2>Homework</h2>
+      <ul class="up-list hw-list">${list.map((h) => html`
+        <li class="${h.due === today ? 'today' : ''}">
+          <span class="up-when">${dueText(h)}</span>
+          <a class="up-title" href="${lessonUrl(c, h.lesson.id)}">${h.lesson.title}</a>
+          <span class="hw-set">${h.set === today ? 'Set today' : `Set ${fmtDay(h.set)}`}</span>
+        </li>`)}</ul>
+    </section>`;
+}
+
 function comingUpCard(c) {
   const today = todayISO();
   const list = c.result.lessons.filter((l) => isAssessmentLike(l) && l.start && l.start.date && l.start.date >= today).slice(0, 3);
@@ -1405,6 +1423,7 @@ function homePanel(c) {
           ${c.isOwner && (!contact || !cls.about) ? html`<p class="hint">Add ${[!contact && 'your contact details', !cls.about && 'a short description'].filter(Boolean).join(' and ')} on the <a href="#/class/${c.id}/setup">Setup</a> tab.</p>` : ''}
         </section>
         ${upNextCard(c)}
+        ${homeworkCard(c)}
         ${comingUpCard(c)}
       </aside>
     </div>`;
@@ -2328,10 +2347,39 @@ function setupPanel(c) {
         </section>
 
         <section class="card">
+          <h2>Share with other teachers</h2>
+          ${c.cls.copyKey ? html`
+            <p class="hint">Another teacher types this copy key under <strong>New class</strong> to get their own copy of your lessons, units, files (teacher-only ones too) and planner. It doesn't let anyone into this class, and it isn't the key your students use.</p>
+            <p class="big-key mono">${formatKey(c.cls.copyKey)}</p>
+            <div class="row">
+              <button class="btn" data-action="copy-copykey">Copy key</button>
+              <button class="btn" data-action="copy-share" data-value="new">Make a new copy key</button>
+              <button class="btn danger-btn" data-action="copy-share" data-value="off">Stop sharing</button>
+            </div>`
+          : html`
+            <p class="hint">Other teachers can't copy this class. Turn sharing on to get a copy key, separate from your students' key, that you can give a colleague.</p>
+            <button class="btn" data-action="copy-share" data-value="on">Let other teachers copy this class</button>`}
+        </section>
+
+        <section class="card">
+          <h2>Download</h2>
+          <p class="hint">Spreadsheet files (CSV) that open in Excel. The marks file has every student's assessment marks, averages and homework for the whole year, ready for Compass or your records.</p>
+          <div class="row">
+            <button class="btn" data-action="export" data-value="lessons">Lessons and dates</button>
+            <button class="btn" data-action="export" data-value="marks">Marks</button>
+          </div>
+        </section>
+
+        <section class="card">
           <h2>Archive</h2>
           ${c.cls.archived
-            ? html`<p>Students can't open this class while it's archived.</p><button class="btn" data-action="archive" data-value="0">Restore class</button>`
-            : html`<p class="hint">Archiving closes the class to students at once. You can still open it and restore it.</p><button class="btn danger-btn" data-action="archive" data-value="1">Archive class</button>`}
+            ? html`<p>Students can't open this class while it's archived.</p>
+              <div class="row">
+                <button class="btn" data-action="archive" data-value="0">Restore class</button>
+                <button class="btn danger-btn" data-action="delete-class">Delete class</button>
+              </div>
+              <p class="hint">Deleting removes the class for good: lessons, files, students, marks and all. Download anything you want to keep first.</p>`
+            : html`<p class="hint">Archiving closes the class to students at once. You can still open it and restore it. An archived class can also be deleted.</p><button class="btn danger-btn" data-action="archive" data-value="1">Archive class</button>`}
         </section>
       </div>
 
@@ -2381,6 +2429,43 @@ function importEventsDialog(c) {
         </div>
       </form>
     </dialog>`;
+}
+
+/* ---------- downloads ---------- */
+
+function downloadFile(name, text, type = 'text/csv') {
+  // A byte-order mark so Excel reads names with accents correctly.
+  const url = URL.createObjectURL(new Blob(['\ufeff', text], { type: `${type};charset=utf-8` }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportCSV(c, what) {
+  const base = `${c.cls.name}${c.cls.year ? ` ${c.cls.year}` : ''}`.replace(/[\\/:*?"<>|]+/g, '').trim() || 'Class';
+  if (what === 'marks') {
+    if (!c.students.length) { toast('Add your students on the Tracker tab first.', 'error'); return; }
+    const cols = trackerCols(c, 'year');
+    downloadFile(`${base} marks.csv`, csvText(marksRows(c.tracker.scale, cols, c.students, c.marks)));
+    return;
+  }
+  const yn = (b) => (b ? 'Yes' : '');
+  const rows = [['Term', 'Week', 'First period', 'Last period', 'Unit', 'Lesson', 'Periods', 'Assessment', 'Homework', 'Files', 'Note']];
+  for (const l of c.lessons) {
+    const p = c.placed.get(l.id);
+    const u = unitById(unitIdOf(c, l));
+    rows.push([
+      isPlaced(l) ? l.term : '', p && p.start ? p.start.week : '',
+      p && p.start ? p.start.date || '' : '', p && p.end ? p.end.date || '' : '',
+      u ? u.name : '', l.title, clampPeriods(l.periods), yn(isAssessmentLike(l)), yn(l.homework),
+      filesFor(c, l.id).length || '', isPlaced(l) ? (statusText(p || {}) || '') : 'Not on the planner',
+    ]);
+  }
+  downloadFile(`${base} lessons.csv`, csvText(rows));
 }
 
 async function savePlan(msg = 'Saved') {
@@ -2569,6 +2654,35 @@ $app.addEventListener('click', async (ev) => {
       showClass(c.id, 'setup');
       toast('New key made');
     } catch (e) { console.error(e); toast("Couldn't make a new key. Try again.", 'error'); }
+  } else if (action === 'copy-copykey') {
+    try { await navigator.clipboard.writeText(formatKey(c.cls.copyKey)); toast('Copy key copied'); } catch { toast("Couldn't copy. Select the key and copy it instead.", 'error'); }
+  } else if (action === 'copy-share') {
+    const v = btn.dataset.value;
+    if (v === 'new' && !confirm('Make a new copy key? The old one stops working, so a teacher partway through copying will need the new one.')) return;
+    if (v === 'off' && !confirm('Stop other teachers copying this class? The copy key stops working straight away. Copies already made are theirs to keep.')) return;
+    try {
+      c.cls.copyKey = await store.setCopyKey(c.id, v !== 'off');
+      showClass(c.id, 'setup');
+      toast(v === 'off' ? 'Sharing turned off' : v === 'new' ? 'New copy key made' : 'Sharing turned on');
+    } catch (e) { console.error(e); toast("Couldn't change sharing. Republish firestore.rules if this keeps happening.", 'error'); }
+  } else if (action === 'export') {
+    exportCSV(c, btn.dataset.value);
+  } else if (action === 'delete-class') {
+    const typed = prompt(`Delete ${c.cls.name} for good? Its lessons, files, students and marks are deleted too, and this can't be undone.\n\nType the class name to confirm.`);
+    if (typed === null) return;
+    if (typed.trim().toLowerCase() !== c.cls.name.trim().toLowerCase()) { toast("That isn't the class name, so nothing was deleted.", 'error'); return; }
+    const id = c.id;
+    const name = c.cls.name;
+    setCls(null);
+    show($app, frame(html`<div class="loading" id="deleting">Deleting ${name}…</div>`));
+    try {
+      await store.deleteClass(id, (text) => { const el = document.getElementById('deleting'); if (el) el.textContent = text; });
+      toast(`${name} deleted`);
+    } catch (e) {
+      console.error(e);
+      toast(`Couldn't finish deleting ${name}. Open it and try again.`, 'error');
+    }
+    if (location.hash === '#/' || location.hash === '') route(); else location.hash = '#/';
   } else if (action === 'hw-toggle') {
     // Not marked -> done -> not done -> not marked.
     const sid = btn.dataset.hw;
@@ -2672,7 +2786,7 @@ $app.addEventListener('submit', async (ev) => {
     let source = null;
     if (template === 'key') {
       const key = normaliseKey(form.importKey.value);
-      if (!key) { msg.textContent = 'Type the class key, like ABCD-2345.'; form.importKey.focus(); return; }
+      if (!key) { msg.textContent = 'Type the copy key, like ABCD-2345.'; form.importKey.focus(); return; }
       btn.disabled = true;
       btn.textContent = 'Finding the class…';
       try {
@@ -2683,7 +2797,7 @@ $app.addEventListener('submit', async (ev) => {
       if (!source) {
         btn.disabled = false;
         btn.textContent = 'Create class';
-        msg.textContent = "No class has that key. Check it with the teacher: a new key or an archived class stops the old one working.";
+        msg.textContent = "No class has that copy key. Check it with the teacher: it's on their Setup tab under Share with other teachers, and it's not the key their students use.";
         return;
       }
       template = source.classId;

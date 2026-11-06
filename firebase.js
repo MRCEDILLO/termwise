@@ -174,6 +174,52 @@ export function createFirebaseStore(config) {
       await b.commit();
     },
 
+    // Lets other teachers copy the class (on), with a fresh copy key each time, or stops it (off).
+    // Returns the new copy key, or null. Separate from the student key, so sharing one never
+    // shares the other.
+    async setCopyKey(id, on) {
+      const cls = await this.getClass(id);
+      const old = cls.copyKey || null;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const key = on ? newKey() : null;
+        const b = writeBatch(db);
+        if (old) b.delete(doc(db, 'copyKeys', old));
+        b.update(doc(db, 'classes', id), { copyKey: key });
+        if (key) b.set(doc(db, 'copyKeys', key), { classId: id, owner: cls.owner });
+        try {
+          await b.commit();
+          return key;
+        } catch (e) {
+          if (!on || e.code !== 'permission-denied' || attempt === 4) throw e;
+        }
+      }
+    },
+
+    // Deletes the class for good: every lesson, unit, file, announcement, student, mark and
+    // membership, both key lookups, then the class itself (last, because the rules check it).
+    // onProgress(text) says what it's on.
+    async deleteClass(id, onProgress = () => {}) {
+      const cls = await this.getClass(id);
+      onProgress('Deleting files…');
+      const files = await this.listFiles(id);
+      for (const f of files) await this.deleteFile(id, f);
+      onProgress('Deleting lessons and marks…');
+      const subs = ['lessons', 'units', 'announcements', 'students', 'marks', 'tracker', 'plan', 'members', 'importers'];
+      for (const sub of subs) {
+        const snap = await getDocs(collection(db, 'classes', id, sub));
+        for (let i = 0; i < snap.docs.length; i += 450) {
+          const b = writeBatch(db);
+          snap.docs.slice(i, i + 450).forEach((d) => b.delete(d.ref));
+          await b.commit();
+        }
+      }
+      const b = writeBatch(db);
+      if (!cls.archived) b.delete(doc(db, 'joinKeys', cls.currentKey));
+      if (cls.copyKey) b.delete(doc(db, 'copyKeys', cls.copyKey));
+      b.delete(doc(db, 'classes', id));
+      await b.commit();
+    },
+
     /* ---------- plan and lessons ---------- */
 
     async getPlan(id) {
@@ -349,7 +395,8 @@ export function createFirebaseStore(config) {
     // no open class has that key.
     async startImport(key) {
       const me = auth.currentUser;
-      const keySnap = await orNull(getDoc(doc(db, 'joinKeys', key)));
+      // A copy key (copyKeys), never the key students join with.
+      const keySnap = await orNull(getDoc(doc(db, 'copyKeys', key)));
       if (!keySnap || !keySnap.exists()) return null;
       const { classId, owner } = keySnap.data();
       if (owner === me.uid) {

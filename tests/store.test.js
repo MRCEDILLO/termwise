@@ -259,12 +259,16 @@ test("another teacher copies a class by its key: their own copy, files included,
   await gabe.uploadFile(src, l1.id, pdf('Worksheet.pdf'));
   await gabe.uploadFile(src, l1.id, pdf('Answers.pdf'), { locked: true });
   await gabe.saveStudents(src, [{ id: gabe.newStudentId(src), name: 'Sam' }]);
-  const key = (await gabe.getClass(src)).currentKey;
+  const studentKey = (await gabe.getClass(src)).currentKey;
+  const key = await gabe.setCopyKey(src, true);
+  assert.match(key, /^[A-HJKMNP-Z2-9]{8}$/);
+  assert.notEqual(key, studentKey);
 
   const other = createFirebaseStore(config(`iko${run}`, { sub: `iko${run}`, email: 'o@example.com', email_verified: true, name: 'Other' }));
   await other.signInTeacher();
   await waitForUser(other);
   assert.equal(await other.startImport('ZZZZZZZZ'), null, 'a key nobody uses finds nothing');
+  assert.equal(await other.startImport(studentKey), null, 'the key students join with is not a copy key');
   const found = await other.startImport(key);
   assert.deepEqual(found, { classId: src, name: '9C Science', own: false });
   const id = await other.createClass({ name: '9D Science', subject: 'Science', year: '2026', colour: 0 });
@@ -290,8 +294,42 @@ test("another teacher copies a class by its key: their own copy, files included,
   await assert.rejects(other.getLessons(src));
   await assert.rejects(other.getStudents(src));
 
-  // A teacher's own key just points at their own class, with no import record.
+  // A teacher's own copy key just points at their own class, with no import record.
   assert.deepEqual(await gabe.startImport(key), { classId: src, name: '9C Science', own: true });
+
+  // Turning sharing off stops the copy key working.
+  assert.equal(await gabe.setCopyKey(src, false), null);
+  assert.equal(await other.startImport(key), null);
+});
+
+test('deleting a class removes everything in it, and its keys', async () => {
+  const run = Date.now();
+  const gabe = createFirebaseStore(config(`dl${run}`, { sub: `dl${run}`, email: 'gabe@example.com', email_verified: true, name: 'Gabe' }));
+  await gabe.signInTeacher();
+  await waitForUser(gabe);
+  const id = await gabe.createClass({ name: '7A Maths', subject: 'Maths', year: '2026', colour: 0 });
+  const l = { id: gabe.newLessonId(id), title: 'Place value', periods: 1, term: 1, order: 0, assessment: true, homework: false };
+  await gabe.saveLesson(id, l);
+  await gabe.saveUnit(id, { id: gabe.newUnitId(id), name: 'Number', order: 0 });
+  const f = await gabe.uploadFile(id, l.id, new File([new Uint8Array([37, 80, 68, 70])], 'Sheet.pdf'));
+  await gabe.addAnnouncement(id, 'Hi');
+  const sid = gabe.newStudentId(id);
+  await gabe.saveStudents(id, [{ id: sid, name: 'Sam' }]);
+  await gabe.setMark(id, sid, 'a', `a-${l.id}`, 7);
+  await gabe.saveTracker(id, { max: { [`a-${l.id}`]: 10 }, extra: [] });
+  const student = createFirebaseStore(config(`dls${run}`));
+  const cls = await gabe.getClass(id);
+  assert.equal(await student.joinWithKey(cls.currentKey), id);
+  const copyKey = await gabe.setCopyKey(id, true);
+  await gabe.setArchived(id, true);
+
+  await gabe.deleteClass(id);
+  assert.equal(await gabe.getClass(id), null);
+  assert.deepEqual((await gabe.listMyClasses()).filter((c) => c.id === id), []);
+  assert.equal(await gabe.startImport(copyKey), null, 'the copy key is gone');
+  await assert.rejects(gabe.fileUrl(id, f), 'the stored file is gone');
+  // A fresh class can't be reached through anything left behind.
+  assert.equal(await student.joinWithKey(cls.currentKey), null);
 });
 
 // Waits until onChange has been called with a kind and data that pass the check.
