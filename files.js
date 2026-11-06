@@ -38,6 +38,11 @@ export function storageName(name) {
   return (name || 'file').replace(/[^\w.\- ()]+/g, '_').slice(-120) || 'file';
 }
 
+// Files for the whole class (year-long notes and resources on the Home tab) are stored like
+// lesson files, with this in place of a lesson id. Firestore ids are 20 characters, so no lesson
+// can have it.
+export const CLASS_FILES = 'class';
+
 // Can a student open this file now? (The storage rules make the same check.)
 export function isOpen(f, now = Date.now()) {
   return !f.locked || f.unlocked || (f.unlockAt != null && now >= f.unlockAt);

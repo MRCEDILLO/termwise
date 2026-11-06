@@ -36,6 +36,20 @@ test('copies units, lessons, planner placement and files with fresh ids, and not
   });
 });
 
+test('class files (Home tab) come across as class files; copying lessons leaves them behind', () => {
+  let n = 0;
+  const files = [
+    { id: 'f1', lessonId: 'class', name: 'Notes.pdf', size: 4, type: 'application/pdf', locked: false },
+    { id: 'f2', lessonId: 'l1', name: 'Sheet.pdf', size: 4, type: 'application/pdf', locked: false },
+  ];
+  const lessons = [{ id: 'l1', title: 'Intro', term: 1, order: 0 }];
+  const out = templateCopy({ lessons, files }, (kind) => `${kind}-${++n}`);
+  assert.deepEqual(out.files.map((f) => [f.from.id, f.lessonId]), [['f1', 'class'], ['f2', 'lesson-1']]);
+
+  const one = copyToClass({ lessons, files }, { units: [], lessons: [] }, (kind) => `${kind}-${++n}`);
+  assert.deepEqual(one.files.map((f) => f.from.id), ['f2'], "copying a lesson doesn't bring the class files");
+});
+
 test('importing events adds them to this class with new ids and skips ones already here', () => {
   let n = 0;
   const mine = [{ id: 'a', term: 1, week: 7, day: 1, period: 'All', label: 'Labour Day' }];

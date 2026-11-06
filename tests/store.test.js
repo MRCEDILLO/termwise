@@ -146,6 +146,10 @@ test('teacher creates a class, a student joins, the key is regenerated, the clas
   assert.ok(await student.fileUrl(id, answers));
   await teacher.deleteFile(id, sheet);
   assert.deepEqual((await teacher.listFiles(id)).map((f) => f.name), ['Answers.pdf']);
+  // A class file (Home tab, for the whole year) works with the current rules.
+  const notes = await teacher.uploadFile(id, 'class', pdf('Lecture notes.pdf'));
+  assert.ok(await student.fileUrl(id, notes));
+  await teacher.deleteFile(id, notes);
 
   // Tracker: names, marks and settings are the teacher's alone.
   const sam = { id: teacher.newStudentId(id), name: 'Sam Patel' };

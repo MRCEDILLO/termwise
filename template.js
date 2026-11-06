@@ -1,8 +1,10 @@
 // Making a class from a template: which parts of an existing class are copied.
 // Only the lesson library and where each lesson sits on the planner come across:
-// units, lessons (with their term and order) and the lessons' files. Nothing else
+// units, lessons (with their term and order), the lessons' files and the class files. Nothing else
 // (students, marks, tracker, announcements, plan dates, key, members) is copied.
 // No Firebase and no DOM here, so it runs the same in the browser and in node --test.
+
+import { CLASS_FILES } from './files.js';
 
 // newId(kind) returns a fresh id for 'unit', 'lesson' or 'file' in the new class.
 // Returns the copies, with every unit and lesson link pointed at the new ids.
@@ -38,10 +40,11 @@ export function templateCopy({ units = [], lessons = [], files = [] }, newId) {
 
   // Files stay teacher-only if they were, but start locked again: the old class's
   // "open now" switch and unlock date belong to that class's timetable.
-  const newFiles = files.filter((f) => lessonIds.has(f.lessonId)).map((f) => ({
+  // Lesson files, and the class's own files (Home tab), which keep their place.
+  const newFiles = files.filter((f) => lessonIds.has(f.lessonId) || f.lessonId === CLASS_FILES).map((f) => ({
     from: f,
     id: newId('file'),
-    lessonId: lessonIds.get(f.lessonId),
+    lessonId: f.lessonId === CLASS_FILES ? CLASS_FILES : lessonIds.get(f.lessonId),
     name: f.name,
     size: f.size,
     type: f.type,

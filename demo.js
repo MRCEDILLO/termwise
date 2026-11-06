@@ -398,7 +398,7 @@ export function createDemoStore() {
     async joinWithKey(key) {
       await tick();
       if (!user) setUser('student');
-      const entry = Object.entries(data.classes).find(([, c]) => c.copyKey === key && !c.archived);
+      const entry = Object.entries(data.classes).find(([, c]) => c.currentKey === key && !c.archived);
       if (!entry) return null;
       data.members[`${entry[0]}/${user.uid}`] = key;
       persist();
