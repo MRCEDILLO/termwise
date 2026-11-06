@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   defaultScale, gradeFor, levelForPoints, trackerColumns, inTerms, parseScore, result, studentSummary,
   assessmentSummary, bands, median, homeworkSummary, classHomework, parseNames, sortStudents, scaleProblem,
+  csvText, marksRows,
 } from '../tracker.js';
 
 const scale = defaultScale();
@@ -98,4 +99,26 @@ test('a grading scale needs one level from 0% and no repeats', () => {
   assert.match(scaleProblem(scale.map((g) => (g.short === 'WBS' ? { ...g, min: 5 } : g))), /0%/);
   assert.match(scaleProblem([...scale, { ...scale[3], label: 'Copy' }]), /short code|same %/);
   assert.match(scaleProblem([]), /at least one/);
+});
+
+test('csvText quotes commas, quotes and line breaks, and defuses formulas', () => {
+  assert.equal(csvText([['Name', 'Note'], ["O'Brien, Finn", 'said "hi"'], ['=SUM(A1)', 'two\nlines'], [7.5, -2, null]]),
+    'Name,Note\r\n"O\'Brien, Finn","said ""hi"""\r\n\'=SUM(A1),"two\nlines"\r\n7.5,-2,\r\n');
+});
+
+test('marksRows gives a row per student with marks, average, standard and homework', () => {
+  const cols = {
+    assessment: [{ id: 'a-1', title: 'Test 1', max: 20 }, { id: 'a-2', title: 'Test 2', max: null }],
+    homework: [{ id: 'h-1', title: 'HW 1' }, { id: 'h-2', title: 'HW 2' }],
+  };
+  const students = [{ id: 's2', name: 'Zara Ahmed' }, { id: 's1', name: 'Ava Nguyen' }];
+  const marks = { s1: { a: { 'a-1': 15 }, h: { 'h-1': true, 'h-2': false } }, s2: { a: { 'a-1': 'IE' } } };
+  const rows = marksRows(scale, cols, students, marks);
+  assert.deepEqual(rows[0], ['Student', 'Test 1 (out of 20)', 'Test 2', 'Average %', 'Standard', 'Homework done', 'Homework marked', 'Homework %']);
+  assert.deepEqual(rows.slice(1).map((r) => r[0]), ['Zara Ahmed', 'Ava Nguyen'], 'sorted by last name');
+  assert.deepEqual(rows[2].slice(0, 3), ['Ava Nguyen', 15, '']);
+  assert.equal(rows[2][3], 75);
+  assert.equal(typeof rows[2][4], 'string');
+  assert.deepEqual(rows[2].slice(5), [1, 2, 50]);
+  assert.deepEqual(rows[1].slice(1, 4), ['IE', '', '']);
 });

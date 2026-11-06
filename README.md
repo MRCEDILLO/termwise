@@ -67,4 +67,7 @@ npm test
    - Class page overhaul: a Home tab (class details, teacher contact, announcements, this week, coming up), a Lessons library of units and lessons with a lesson builder, and a Planner that searches the library to fill each term. Shift-drag moves a run of lessons from one unit together. **Done**
 4. Tracker and reports: class list (names only), a grading scale per class (the 6-level standards by default), assessment marks and homework ticks with a column for every lesson ticked Assessment or Homework, and three printable reports (student, class summary, assessment analysis). Only the class's teacher can read any of it. **Done**
    - Teacher home shows **Today and the next school day** across every class, with each lesson's files one click away. **Copy to another class** (in the lesson builder) sends a lesson or its whole unit, with files, to another of your classes. A lesson can **open its teacher-only files after the lesson** (4 pm on the day of its last period), and the unlock moves when the planner moves the lesson. Open class pages **update live** when something changes elsewhere, so two devices (or a teacher and a student) never work from stale data. None of this needs a rules change. **Done**
-5. Templates, export, delete.
+5. Templates, export, delete. **Done**
+   - Sharing a class with other teachers uses a separate **copy key** (Setup > Share with other teachers), off until the teacher turns it on. The key students join with never lets another teacher copy a class.
+   - Setup downloads the lesson list with dates and the year's marks as spreadsheet files (CSV), and an archived class can be deleted for good.
+   - Students' Home tab lists homework and when it's due (the next lesson after the homework lesson).

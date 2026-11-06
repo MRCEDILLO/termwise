@@ -225,6 +225,18 @@ export function createDemoStore() {
       return key;
     },
     async setArchived(id, archived) { data.classes[id].archived = archived; persist(); },
+    async setCopyKey(id, on) {
+      data.classes[id].copyKey = on ? newKey() : null;
+      persist();
+      return data.classes[id].copyKey;
+    },
+    async deleteClass(id) {
+      for (const k of ['classes', 'plans', 'units', 'lessons', 'announcements', 'students', 'marks', 'trackers']) {
+        if (data[k]) delete data[k][id];
+      }
+      delete demoFiles[id];
+      persist();
+    },
 
     async getPlan(id) { return structuredClone({ ...emptyPlan(), ...(data.plans[id] || {}) }); },
     async savePlan(id, plan) { data.plans[id] = structuredClone(plan); persist(); },
@@ -342,7 +354,7 @@ export function createDemoStore() {
     // Demo mode has one teacher, so a key can only find one of their own classes.
     async startImport(key) {
       await tick();
-      const entry = Object.entries(data.classes).find(([, c]) => c.currentKey === key && !c.archived);
+      const entry = Object.entries(data.classes).find(([, c]) => c.copyKey === key && !c.archived);
       return entry ? { classId: entry[0], name: entry[1].name, own: entry[1].owner === user.uid } : null;
     },
     async endImport() {},
@@ -376,7 +388,7 @@ export function createDemoStore() {
     async joinWithKey(key) {
       await tick();
       if (!user) setUser('student');
-      const entry = Object.entries(data.classes).find(([, c]) => c.currentKey === key && !c.archived);
+      const entry = Object.entries(data.classes).find(([, c]) => c.copyKey === key && !c.archived);
       if (!entry) return null;
       data.members[`${entry[0]}/${user.uid}`] = key;
       persist();

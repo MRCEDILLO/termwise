@@ -51,12 +51,15 @@ service cloud.firestore {
       return signedIn() && c.archived == false && exists(m) && get(m).data.key == c.currentKey;
     }
 
-    // A teacher copying this class into a new class of their own, using the class's current key
-    // (see importers below). They can read the lesson library and files, nothing else.
+    // A teacher copying this class into a new class of their own, using the class's copy key
+    // (see importers below). They can read the lesson library and files, nothing else. The copy key
+    // is separate from the key students join with, and a class has none until its teacher turns
+    // sharing on, so a student key on the board never lets another teacher in.
     function isImporter(classId) {
       let c = get(classPath(classId)).data;
       let m = /databases/$(database)/documents/classes/$(classId)/importers/$(request.auth.uid);
-      return isTeacher() && c.archived == false && exists(m) && get(m).data.key == c.currentKey;
+      return isTeacher() && c.archived == false && validKey(c.get('copyKey', ''))
+        && exists(m) && get(m).data.key == c.get('copyKey', '');
     }
 
     // 8 characters with no look-alikes (no 0, O, 1, I, L).
@@ -65,12 +68,14 @@ service cloud.firestore {
     }
 
     function validClass(d) {
-      return d.keys().hasOnly(['name', 'subject', 'year', 'owner', 'currentKey', 'archived', 'colour', 'createdAt', 'teacher', 'contact', 'about'])
+      return d.keys().hasOnly(['name', 'subject', 'year', 'owner', 'currentKey', 'copyKey', 'archived', 'colour', 'createdAt', 'teacher', 'contact', 'about'])
         && d.name is string && d.name.size() > 0 && d.name.size() <= 80
         && d.subject is string && d.subject.size() <= 80
         && d.year is string && d.year.size() <= 20
         && d.archived is bool
         && validKey(d.currentKey)
+        // Set only while the teacher lets other teachers copy the class.
+        && (!('copyKey' in d) || d.copyKey == null || validKey(d.copyKey))
         && (!('colour' in d) || (d.colour is int && d.colour >= 0 && d.colour < 32))
         && (!('createdAt' in d) || d.createdAt is timestamp || d.createdAt is int)
         // Shown to students on the class home page.
@@ -83,6 +88,12 @@ service cloud.firestore {
     // teacher can't set their class's key to a key another class already uses.
     function keyIsFor(key, classId) {
       return getAfter(/databases/$(database)/documents/joinKeys/$(key)).data.classId == classId;
+    }
+
+    // The same for the copy key: null (sharing off), or a copyKeys lookup pointing back at this class.
+    function copyKeyOk(d, classId) {
+      return d.get('copyKey', null) == null
+        || getAfter(/databases/$(database)/documents/copyKeys/$(d.copyKey)).data.classId == classId;
     }
 
     function validFile(d) {
@@ -129,6 +140,20 @@ service cloud.firestore {
       allow delete: if isTeacher() && resource.data.owner == request.auth.uid;
     }
 
+    // Copy keys: how another teacher finds a class to copy. Only teachers may look one up.
+    match /copyKeys/{key} {
+      allow get: if isTeacher();
+      allow list: if false;
+      allow create: if isTeacher()
+        && validKey(key)
+        && request.resource.data.keys().hasOnly(['classId', 'owner'])
+        && request.resource.data.owner == request.auth.uid
+        && getAfter(classPath(request.resource.data.classId)).data.owner == request.auth.uid
+        && getAfter(classPath(request.resource.data.classId)).data.get('copyKey', null) == key;
+      allow update: if false;
+      allow delete: if isTeacher() && resource.data.owner == request.auth.uid;
+    }
+
     /* ---------- classes ---------- */
 
     match /classes/{classId} {
@@ -137,13 +162,16 @@ service cloud.firestore {
       allow create: if isTeacher()
         && request.resource.data.owner == request.auth.uid
         && validClass(request.resource.data)
-        && keyIsFor(request.resource.data.currentKey, classId);
+        && keyIsFor(request.resource.data.currentKey, classId)
+        && copyKeyOk(request.resource.data, classId);
       allow update: if isTeacher()
         && resource.data.owner == request.auth.uid
         && request.resource.data.owner == resource.data.owner
         && validClass(request.resource.data)
         && (request.resource.data.currentKey == resource.data.currentKey
-            || keyIsFor(request.resource.data.currentKey, classId));
+            || keyIsFor(request.resource.data.currentKey, classId))
+        && (request.resource.data.get('copyKey', null) == resource.data.get('copyKey', null)
+            || copyKeyOk(request.resource.data, classId));
       allow delete: if isTeacher() && resource.data.owner == request.auth.uid;
 
       // A student's membership: just the key they joined with.
@@ -159,9 +187,9 @@ service cloud.firestore {
         allow delete: if signedIn() && (request.auth.uid == uid || isOwner(classId));
       }
 
-      // Another teacher copying this class, with the key they typed in (like a membership, but for
-      // teachers). It only lets them read units, lessons and files, and the app deletes it once
-      // the copy is done. A new key or archiving the class cuts it off, as it does for students.
+      // Another teacher copying this class, with the copy key they typed in (like a membership, but
+      // for teachers). It only lets them read units, lessons and files, and the app deletes it once
+      // the copy is done. A new copy key, turning sharing off or archiving the class cuts it off.
       match /importers/{uid} {
         allow get: if signedIn() && (request.auth.uid == uid || isOwner(classId));
         allow list: if isOwner(classId);
@@ -170,7 +198,8 @@ service cloud.firestore {
           && request.resource.data.keys().hasOnly(['key', 'at'])
           && (!('at' in request.resource.data) || request.resource.data.at is int)
           && get(classPath(classId)).data.archived == false
-          && request.resource.data.key == get(classPath(classId)).data.currentKey;
+          && validKey(request.resource.data.key)
+          && request.resource.data.key == get(classPath(classId)).data.get('copyKey', '');
         allow delete: if signedIn() && (request.auth.uid == uid || isOwner(classId));
       }
 

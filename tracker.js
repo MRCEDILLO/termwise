@@ -217,3 +217,41 @@ export function scaleProblem(scale) {
   if (new Set(mins).size !== mins.length) return 'Two levels start at the same %.';
   return '';
 }
+
+/* ---------- downloads ---------- */
+
+// Rows of cells as CSV text that Excel opens: commas, quotes and line breaks are quoted, and text
+// that starts like a formula (= + - @) gets a leading ' so a spreadsheet shows it rather than runs it.
+export function csvText(rows) {
+  const cell = (v) => {
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'number') return String(v);
+    let s = String(v);
+    if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  return rows.map((r) => r.map(cell).join(',')).join('\r\n') + '\r\n';
+}
+
+// The marks download: a row per student (sorted like the tracker) with each assessment's mark
+// (or the by-hand level, like IE), their average and standard, and homework done.
+export function marksRows(scale, cols, students, marksById) {
+  const head = [
+    'Student',
+    ...cols.assessment.map((c) => (c.max ? `${c.title} (out of ${c.max})` : c.title)),
+    'Average %', 'Standard', 'Homework done', 'Homework marked', 'Homework %',
+  ];
+  const rows = sortStudents(students).map((s) => {
+    const m = marksById[s.id] || {};
+    const sum = studentSummary(scale, cols, m);
+    return [
+      s.name,
+      ...cols.assessment.map((c) => {
+        const raw = (m.a || {})[c.id];
+        return raw === undefined || raw === null ? '' : raw;
+      }),
+      sum.avgPct ?? '', sum.avgLevel ? sum.avgLevel.label : '', sum.hwDone, sum.hwMarked, sum.hwPct ?? '',
+    ];
+  });
+  return [head, ...rows];
+}

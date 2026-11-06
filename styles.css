@@ -560,6 +560,7 @@ label.inline select { width: auto; margin: 0; padding: 6px 10px; }
 .up-title { font-weight: 700; text-decoration: none; overflow-wrap: anywhere; }
 a.up-title:hover { text-decoration: underline; }
 .more { font-weight: 700; font-size: .92rem; text-decoration: none; }
+.hw-set { font-size: .8rem; color: var(--ink-2); }
 
 /* ---------- today: the teacher's lessons across classes ---------- */
 .today { margin-bottom: 28px; }

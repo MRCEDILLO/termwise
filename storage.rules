@@ -47,7 +47,7 @@ service firebase.storage {
 
     // Who may open a file. Written so that each kind of reader costs at most two Firestore
     // documents (the limit above): the class's teacher (class + teacher list), another teacher
-    // copying the class with its key (class + their importers record) and a student (class +
+    // copying the class with its copy key (class + their importers record) and a student (class +
     // membership). An importer may open every file, teacher-only ones too, because a copy of a
     // class brings those across. The importers record can only be written by someone on the
     // teacher list (firestore.rules), so the list isn't read again here.
@@ -60,7 +60,7 @@ service firebase.storage {
         || (c.owner != uid && c.archived == false
             && request.auth.token.firebase.sign_in_provider == 'google.com'
             && request.auth.token.email_verified == true
-            && firestore.exists(imp) && firestore.get(imp).data.key == c.currentKey)
+            && firestore.exists(imp) && firestore.get(imp).data.key == c.get('copyKey', ''))
         || (c.owner != uid && c.archived == false
             && firestore.exists(m) && firestore.get(m).data.key == c.currentKey && isOpen());
     }
