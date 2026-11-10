@@ -454,12 +454,26 @@ async function saveClassOrder() {
   const removed = wasPinned.filter((id) => !next.pinned.includes(id));
   h.order = next;
   renderClassList();
+  renderToday();
   const name = (id) => (h.classes.find((c) => c.id === id) || {}).name;
   const msg = added.length ? `Pinned ${name(added[0])}` : removed.length ? `Unpinned ${name(removed[0])}` : 'Order saved';
   await saving(store.saveClassOrder(next), msg);
 }
 
-/* ---------- today: every class's lessons for today and the next school day ---------- */
+/* ---------- today: the pinned classes' lessons for today and the next school day ---------- */
+
+// Only pinned classes feed Today and Tomorrow. With nothing pinned, both days are empty. Every live class is
+// still loaded, so pinning or unpinning updates the panel straight away.
+function todayClasses(data, pinned = []) {
+  const pins = new Set(pinned);
+  return data.filter((d) => pins.has(d.cls.id));
+}
+
+function renderToday() {
+  const el = document.getElementById('today');
+  if (!el || !state.today) return;
+  show(el, todayPanel(state.today));
+}
 
 // Today and the next school day (Monday after a Friday). At the weekend: Monday and Tuesday.
 function teachingDays(today = todayISO()) {
@@ -498,10 +512,11 @@ async function loadToday(classes) {
   const el = document.getElementById('today');
   if (!el) return; // moved on to another page
   state.today = data;
-  show(el, todayPanel(data));
+  renderToday();
 }
 
-function todayPanel(data) {
+function todayPanel(all) {
+  const data = todayClasses(all, (state.home && state.home.order.pinned) || []);
   const days = teachingDays();
   const rowsFor = (iso) => data.flatMap((d) => daySessions(d.result, iso).map((s) => ({ ...s, d })))
     .sort((a, b) => a.from - b.from || a.d.cls.name.localeCompare(b.d.cls.name));
@@ -533,10 +548,11 @@ function todayPanel(data) {
                       </button>`)}</div>` : ''}
                   </div>
                 </li>`;
-            })}</ul>` : html`<p class="empty small">No lessons on your planners.</p>`}
+            })}</ul>` : html`<p class="empty small">${data.length ? 'No lessons for your pinned classes.' : 'No pinned classes.'}</p>`}
           </section>`;
       })}
     </div>
+    <p class="hint">${data.length ? 'Showing your pinned classes only.' : 'Pin a class below to see its lessons here.'}</p>
     ${failed.length ? html`<p class="hint">Couldn't load ${failed.map((d) => d.cls.name).join(', ')}. Reload the page to try again.</p>` : ''}`;
 }
 
